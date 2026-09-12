@@ -57,6 +57,7 @@ import com.phisher98.StreamPlayExtractor.invokeKickAssAnime
 import com.phisher98.StreamPlayExtractor.invokeReAnime
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.coroutineScope
 import java.util.Calendar
 
 class StreamPlayAnime : MainAPI() {
@@ -344,7 +345,7 @@ class StreamPlayAnime : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    ): Boolean = coroutineScope {
         val mediaData = AppUtils.parseJson<LinkData>(data)
         val malId = mediaData.malId
         val episode = mediaData.episode
@@ -354,9 +355,13 @@ class StreamPlayAnime : MainAPI() {
         val aniid = mediaData.aniId
         val year = mediaData.year
 
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = callback,
+            scope = this
+        )
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator(
-            upstreamCallback = { callback(it) },
-            onUpgradeCallback = { callback(it) }
+            upstreamCallback = { link -> dispatcher.onLinkAccepted(link) },
+            onUpgradeCallback = { link -> dispatcher.onLinkAccepted(link) }
         )
         val emittedSubtitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
@@ -386,16 +391,20 @@ class StreamPlayAnime : MainAPI() {
         val earlySatisfactionConfig = EarlySatisfactionConfig(
             minVerifiedLinks = 2,
             minQualityStreams = 1,
-            qualityThreshold = Qualities.P1080.value,
+            qualityThreshold = Qualities.P720.value,
             highBitrateThresholdKbps = 2500,
             minSubtitles = 1,
             satisfyWithOneLinkIfSubsFound = true,
             requireSubtitles = false,
+            require720p = true,
             adaptiveTierEscalation = true,
             softGracePeriodAfterFirstLinkMs = 3500L,
             maxPipelineTimeoutMs = 18_000L
         )
         val earlyController = EarlySatisfactionController(earlySatisfactionConfig)
+        earlyController.onSatisfiedCallback = {
+            dispatcher.flush()
+        }
 
         val animeLinksFound = java.util.concurrent.atomic.AtomicInteger(0)
         val trackedCallback: (ExtractorLink) -> Unit = { link ->
@@ -419,6 +428,7 @@ class StreamPlayAnime : MainAPI() {
                 if (emittedSubtitles.add(key)) {
                     earlyController.onSubtitleEmitted(sub)
                     subtitleCallback(sub)
+                    dispatcher.onSubtitleReceived()
                 }
             }
         }
@@ -465,7 +475,8 @@ class StreamPlayAnime : MainAPI() {
             config = earlySatisfactionConfig,
             controller = earlyController
         )
-        return true
+        dispatcher.flush()
+        true
     }
 
     fun getStatus(t: String?): ShowStatus {

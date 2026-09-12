@@ -45,34 +45,37 @@ class DualQualityAndSotaHierarchyTest {
 
     @Test
     fun testQualityPriorityScoreHierarchy() {
-        // Users must get 720 and 1080 as highest prioritized, then below 720, then above 1080
-        val score1080 = StreamLinkOptimizer.getQualityPriorityScore(Qualities.P1080.value)
+        // Users must get 720 as #1 priority, then 1080, then 480, then intermediate SD, then above 1080 (1440/4k), then <480
         val score720 = StreamLinkOptimizer.getQualityPriorityScore(Qualities.P720.value)
-        val score576 = StreamLinkOptimizer.getQualityPriorityScore(576)
+        val score1080 = StreamLinkOptimizer.getQualityPriorityScore(Qualities.P1080.value)
         val score480 = StreamLinkOptimizer.getQualityPriorityScore(Qualities.P480.value)
-        val score360 = StreamLinkOptimizer.getQualityPriorityScore(Qualities.P360.value)
+        val score576 = StreamLinkOptimizer.getQualityPriorityScore(576)
         val score1440 = StreamLinkOptimizer.getQualityPriorityScore(Qualities.P1440.value)
         val score2160 = StreamLinkOptimizer.getQualityPriorityScore(Qualities.P2160.value)
+        val score360 = StreamLinkOptimizer.getQualityPriorityScore(Qualities.P360.value)
         val scoreUnknown = StreamLinkOptimizer.getQualityPriorityScore(Qualities.Unknown.value)
 
-        assertEquals(10000, score1080)
-        assertEquals(9000, score720)
-        assertEquals(5576, score576)
-        assertEquals(5480, score480)
-        assertEquals(5360, score360)
+        assertEquals(10000, score720)
+        assertEquals(9000, score1080)
+        assertEquals(7000, score480)
+        assertEquals(6500, score576)
+        assertEquals(3640, score1440)
+        assertEquals(2920, score2160)
+        assertEquals(1360, score360)
+        assertEquals(0, scoreUnknown)
 
-        // Strict monotonicity checks
-        assertTrue("1080p must beat 720p", score1080 > score720)
-        assertTrue("720p must beat 576p (below 720)", score720 > score576)
-        assertTrue("576p must beat 480p", score576 > score480)
-        assertTrue("480p must beat 360p", score480 > score360)
-        assertTrue("360p (below 720) must beat 1440p (above 1080)", score360 > score1440)
+        // Strict monotonicity checks: 720 > 1080 > 480 > 576 > 1440 > 2160 > 360 > Unknown
+        assertTrue("720p must beat 1080p as #1 priority", score720 > score1080)
+        assertTrue("1080p must beat 480p", score1080 > score480)
+        assertTrue("480p must beat 576p", score480 > score576)
+        assertTrue("576p must beat 1440p", score576 > score1440)
         assertTrue("1440p must beat 2160p", score1440 > score2160)
-        assertTrue("2160p must beat Unknown", score2160 > scoreUnknown)
+        assertTrue("2160p (above 1080) must beat 360p (<480)", score2160 > score360)
+        assertTrue("360p must beat Unknown", score360 > scoreUnknown)
 
         // Prioritized checker
-        assertTrue(StreamLinkOptimizer.isQualityPrioritized(Qualities.P1080.value))
         assertTrue(StreamLinkOptimizer.isQualityPrioritized(Qualities.P720.value))
+        assertTrue(StreamLinkOptimizer.isQualityPrioritized(Qualities.P1080.value))
         assertFalse(StreamLinkOptimizer.isQualityPrioritized(Qualities.P2160.value))
         assertFalse(StreamLinkOptimizer.isQualityPrioritized(Qualities.P480.value))
         assertFalse(StreamLinkOptimizer.isQualityPrioritized(Qualities.Unknown.value))
@@ -104,46 +107,45 @@ class DualQualityAndSotaHierarchyTest {
 
     @Test
     fun testCompositeStreamScoreOrdering() {
-        val vidlink1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
         val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
+        val vidlink1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
         val vidlink480 = createLink("VidLink", "VidLink [480p]", "https://vidlink.pro/480.m3u8", Qualities.P480.value)
         val vidlink4k = createLink("VidLink", "VidLink [4K]", "https://vidlink.pro/4k.m3u8", Qualities.P2160.value)
 
-        val s1080 = StreamLinkOptimizer.getStreamCompositeScore(vidlink1080)
         val s720 = StreamLinkOptimizer.getStreamCompositeScore(vidlink720)
+        val s1080 = StreamLinkOptimizer.getStreamCompositeScore(vidlink1080)
         val s480 = StreamLinkOptimizer.getStreamCompositeScore(vidlink480)
         val s4k = StreamLinkOptimizer.getStreamCompositeScore(vidlink4k)
 
-        assertTrue("VidLink 1080p score ($s1080) > 720p ($s720)", s1080 > s720)
-        assertTrue("VidLink 720p score ($s720) > 480p ($s480)", s720 > s480)
+        assertTrue("VidLink 720p score ($s720) > 1080p ($s1080)", s720 > s1080)
+        assertTrue("VidLink 1080p score ($s1080) > 480p ($s480)", s1080 > s480)
         assertTrue("VidLink 480p score ($s480) > 4K ($s4k)", s480 > s4k)
 
-        // Comparator check
-        val list = listOf(vidlink4k, vidlink480, vidlink720, vidlink1080)
+        // Comparator check: 720p first, then 1080p, then 480p, then 4K
+        val list = listOf(vidlink4k, vidlink480, vidlink1080, vidlink720)
         val sorted = list.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR)
-        assertEquals(vidlink1080, sorted[0])
-        assertEquals(vidlink720, sorted[1])
+        assertEquals(vidlink720, sorted[0])
+        assertEquals(vidlink1080, sorted[1])
         assertEquals(vidlink480, sorted[2])
         assertEquals(vidlink4k, sorted[3])
     }
 
     @Test
     fun testCrossSourceQualityFirstPrioritization() {
-        // Lower-ranked source at 1080p or 720p must be prioritized over higher-ranked source at 480p or 4K
+        // 720p is #1 priority across sources, then 1080p, then 480p, then 4K
+        val autoembed720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://autoembed.cc/720.m3u8", Qualities.P720.value)
         val hexa1080 = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/1080.m3u8", Qualities.P1080.value)
         val vidlink480 = createLink("VidLink", "VidLink [480p]", "https://vidlink.pro/480.m3u8", Qualities.P480.value)
         val vidlink4k = createLink("VidLink", "VidLink [4K]", "https://vidlink.pro/4k.m3u8", Qualities.P2160.value)
-        val autoembed720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://autoembed.cc/720.m3u8", Qualities.P720.value)
 
-        val sHexa1080 = StreamLinkOptimizer.getStreamCompositeScore(hexa1080)
         val sAuto720 = StreamLinkOptimizer.getStreamCompositeScore(autoembed720)
+        val sHexa1080 = StreamLinkOptimizer.getStreamCompositeScore(hexa1080)
         val sVidlink480 = StreamLinkOptimizer.getStreamCompositeScore(vidlink480)
         val sVidlink4k = StreamLinkOptimizer.getStreamCompositeScore(vidlink4k)
 
+        assertTrue("AutoEmbed 720p ($sAuto720) must beat HexaSU 1080p ($sHexa1080)", sAuto720 > sHexa1080)
         assertTrue("HexaSU 1080p ($sHexa1080) must beat VidLink 480p ($sVidlink480)", sHexa1080 > sVidlink480)
-        assertTrue("AutoEmbed 720p ($sAuto720) must beat VidLink 480p ($sVidlink480)", sAuto720 > sVidlink480)
-        assertTrue("HexaSU 1080p ($sHexa1080) must beat VidLink 4K ($sVidlink4k)", sHexa1080 > sVidlink4k)
-        assertTrue("AutoEmbed 720p ($sAuto720) must beat VidLink 4K ($sVidlink4k)", sAuto720 > sVidlink4k)
+        assertTrue("VidLink 480p ($sVidlink480) must beat VidLink 4K ($sVidlink4k)", sVidlink480 > sVidlink4k)
     }
 
     @Test
@@ -232,6 +234,36 @@ class DualQualityAndSotaHierarchyTest {
     }
 
     @Test
+    fun testEarlySatisfactionControllerStrict720pAndSubtitlesGating() {
+        val config = EarlySatisfactionConfig(
+            minVerifiedLinks = 1,
+            minQualityStreams = 1,
+            qualityThreshold = Qualities.P720.value,
+            requireSubtitles = true,
+            requireDualQualities = false,
+            require720p = true
+        )
+        val controller = EarlySatisfactionController(config)
+
+        val link1080 = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/v1080.m3u8", Qualities.P1080.value)
+        val sub = createSubtitle("English", "https://hexa.su/sub.vtt")
+        val link720 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/v720.m3u8", Qualities.P720.value)
+
+        // 1. Emit 1080p -> unsatisfied
+        controller.onLinkEmitted(link1080)
+        assertFalse("Cannot satisfy with 1080p when require720p is true", controller.isSatisfied())
+
+        // 2. Emit subtitles -> still unsatisfied because 720p has not arrived
+        controller.onSubtitleEmitted(sub)
+        assertFalse("Cannot satisfy with subtitles + 1080p when require720p is true", controller.isSatisfied())
+
+        // 3. Emit 720p -> 720p + subtitles present -> SATISFIED!
+        val satisfied = controller.onLinkEmitted(link720)
+        assertTrue("Must satisfy once 720p is emitted with subtitles", satisfied)
+        assertTrue(controller.isSatisfied())
+    }
+
+    @Test
     fun testStreamDeduplicatorRetainsBoth1080pAnd720pVariantsWithCleanUrls() {
         val emittedList = mutableListOf<ExtractorLink>()
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator { emittedList.add(it) }
@@ -284,6 +316,31 @@ class DualQualityAndSotaHierarchyTest {
     }
 
     @Test
+    fun testIsStreamBetterStrictSotaQualityHierarchy() {
+        val link720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/video.mp4", Qualities.P720.value, type = ExtractorLinkType.VIDEO)
+        val link1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/video.mp4", Qualities.P1080.value, type = ExtractorLinkType.VIDEO)
+        val link480 = createLink("VidLink", "VidLink [480p]", "https://vidlink.pro/video.mp4", Qualities.P480.value, type = ExtractorLinkType.VIDEO)
+        val link576 = createLink("VidLink", "VidLink [576p]", "https://vidlink.pro/video.mp4", 576, type = ExtractorLinkType.VIDEO)
+        val link1440 = createLink("VidLink", "VidLink [1440p]", "https://vidlink.pro/video.mp4", Qualities.P1440.value, type = ExtractorLinkType.VIDEO)
+        val link4k = createLink("VidLink", "VidLink [4K]", "https://vidlink.pro/video.mp4", Qualities.P2160.value, type = ExtractorLinkType.VIDEO)
+        val link360 = createLink("VidLink", "VidLink [360p]", "https://vidlink.pro/video.mp4", Qualities.P360.value, type = ExtractorLinkType.VIDEO)
+        val linkUnknown = createLink("VidLink", "VidLink [Unknown]", "https://vidlink.pro/video.mp4", Qualities.Unknown.value, type = ExtractorLinkType.VIDEO)
+
+        // Strict SOTA quality hierarchy: 720p > 1080p > 480p > 576p > 1440p > 4K > 360p > Unknown
+        assertTrue("720p must be better stream than 1080p", StreamLinkOptimizer.isStreamBetter(link720, link1080))
+        assertFalse("1080p must NOT be better stream than 720p", StreamLinkOptimizer.isStreamBetter(link1080, link720))
+
+        assertTrue("1080p must be better stream than 480p", StreamLinkOptimizer.isStreamBetter(link1080, link480))
+        assertFalse("480p must NOT be better stream than 1080p", StreamLinkOptimizer.isStreamBetter(link480, link1080))
+
+        assertTrue("480p must be better stream than 576p", StreamLinkOptimizer.isStreamBetter(link480, link576))
+        assertTrue("576p must be better stream than 1440p", StreamLinkOptimizer.isStreamBetter(link576, link1440))
+        assertTrue("1440p must be better stream than 4K", StreamLinkOptimizer.isStreamBetter(link1440, link4k))
+        assertTrue("4K must be better stream than 360p", StreamLinkOptimizer.isStreamBetter(link4k, link360))
+        assertTrue("360p must be better stream than Unknown", StreamLinkOptimizer.isStreamBetter(link360, linkUnknown))
+    }
+
+    @Test
     fun testDirectMp4FileQualityUpgradePreserved() {
         val emittedList = mutableListOf<ExtractorLink>()
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator { emittedList.add(it) }
@@ -295,6 +352,122 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals("For single MP4 file, 1080p upgrades 720p", StreamLinkOptimizer.DeduplicationResult.UPGRADED, deduplicator.emitDetailed(mp4_1080))
         assertEquals(1, deduplicator.getEmittedCount())
         assertEquals(Qualities.P1080.value, deduplicator.getEmittedLinks().first().quality)
+    }
+
+    @Test
+    fun testPriorityStreamDispatcherDispatches720pAndSubtitlesFirst() = kotlinx.coroutines.runBlocking {
+        val dispatchedLinks = mutableListOf<ExtractorLink>()
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = { dispatchedLinks.add(it) },
+            scope = this,
+            stageWindowMs = 200L,
+            subtitleGraceMs = 150L
+        )
+
+        val hexa1080 = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/1080.m3u8", Qualities.P1080.value)
+        val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
+        val vidlink480 = createLink("VidLink", "VidLink [480p]", "https://vidlink.pro/480.m3u8", Qualities.P480.value)
+
+        // 1. HexaSU 1080p arrives first at t=0ms
+        dispatcher.onLinkAccepted(hexa1080)
+        assertTrue("1080p must be staged while waiting for 720p", dispatchedLinks.isEmpty())
+
+        // 2. Subtitles arrive at t=20ms
+        dispatcher.onSubtitleReceived()
+        assertTrue("Still staged because 720p has not arrived yet", dispatchedLinks.isEmpty())
+
+        // 3. VidLink 720p arrives at t=40ms
+        dispatcher.onLinkAccepted(vidlink720)
+
+        // VidLink 720p must be dispatched IMMEDIATELY as link #1 because 720p + subtitles are satisfied!
+        assertTrue("Dispatcher must have emitted top stream", dispatcher.hasTopStreamEmitted())
+        assertEquals("First dispatched link must be VidLink 720p", vidlink720, dispatchedLinks[0])
+        assertEquals("Second dispatched link must be HexaSU 1080p", hexa1080, dispatchedLinks[1])
+
+        // 4. Later arriving 480p link
+        dispatcher.onLinkAccepted(vidlink480)
+        assertEquals("Third dispatched link must be 480p", vidlink480, dispatchedLinks[2])
+    }
+
+    @Test
+    fun testPriorityStreamDispatcherPrefersTopSourceRankVidLinkOverLowerRank720p() = kotlinx.coroutines.runBlocking {
+        val dispatchedLinks = mutableListOf<ExtractorLink>()
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = { dispatchedLinks.add(it) },
+            scope = this,
+            stageWindowMs = 300L,
+            subtitleGraceMs = 250L,
+            topSourceGraceMs = 150L
+        )
+
+        val vidfast720 = createLink("VidFast", "VidFast [720p]", "https://vidfast.pro/720.m3u8", Qualities.P720.value)
+        val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
+
+        // 1. Subtitles are already present
+        dispatcher.onSubtitleReceived()
+
+        // 2. Lower-tier VidFast 720p (rank 70) arrives first at t=0ms
+        dispatcher.onLinkAccepted(vidfast720)
+        assertTrue("VidFast 720p must be staged briefly waiting for top-tier VidLink 100", dispatchedLinks.isEmpty())
+
+        // 3. Top-tier VidLink 720p (rank 100) arrives at t=30ms
+        kotlinx.coroutines.delay(30L)
+        dispatcher.onLinkAccepted(vidlink720)
+
+        // VidLink 720p must be dispatched IMMEDIATELY as link #1!
+        assertTrue("Dispatcher must have emitted top stream", dispatcher.hasTopStreamEmitted())
+        assertEquals("First dispatched link must be VidLink 720p", vidlink720, dispatchedLinks[0])
+        assertEquals("Second dispatched link must be VidFast 720p", vidfast720, dispatchedLinks[1])
+    }
+
+    @Test
+    fun testPriorityStreamDispatcherEmitsLowerRank720pAfterGraceTimeout() = kotlinx.coroutines.runBlocking {
+        val dispatchedLinks = mutableListOf<ExtractorLink>()
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = { dispatchedLinks.add(it) },
+            scope = this,
+            stageWindowMs = 300L,
+            subtitleGraceMs = 250L,
+            topSourceGraceMs = 100L
+        )
+
+        val vidfast720 = createLink("VidFast", "VidFast [720p]", "https://vidfast.pro/720.m3u8", Qualities.P720.value)
+
+        // 1. Subtitles are already present
+        dispatcher.onSubtitleReceived()
+
+        // 2. VidFast 720p arrives at t=0ms
+        dispatcher.onLinkAccepted(vidfast720)
+        assertTrue("VidFast 720p must be staged briefly", dispatchedLinks.isEmpty())
+
+        // 3. Wait for topSourceGraceMs to expire (100ms + 60ms buffer)
+        kotlinx.coroutines.delay(160L)
+
+        // VidFast 720p must be dispatched as link #1 after timeout since VidLink did not arrive
+        assertTrue("Dispatcher must have emitted top stream after grace timeout", dispatcher.hasTopStreamEmitted())
+        assertEquals("First dispatched link must be VidFast 720p", vidfast720, dispatchedLinks[0])
+    }
+
+    @Test
+    fun testEarlySatisfactionControllerDetects720pFromUrl() {
+        val config = EarlySatisfactionConfig(
+            minVerifiedLinks = 1,
+            minQualityStreams = 1,
+            qualityThreshold = Qualities.P720.value,
+            requireSubtitles = true,
+            requireDualQualities = false,
+            require720p = true
+        )
+        val controller = EarlySatisfactionController(config)
+
+        val sub = createSubtitle("English", "https://example.com/sub.vtt")
+        controller.onSubtitleEmitted(sub)
+
+        // Link with quality only in URL, Unknown in link.quality and link.name
+        val linkUrl720 = createLink("VidLink", "VidLink Server Fast", "https://vidlink.pro/video/720p/manifest.m3u8", Qualities.Unknown.value)
+        val satisfied = controller.onLinkEmitted(linkUrl720)
+        assertTrue("Must satisfy when 720p is detected from URL and subtitles present", satisfied)
+        assertTrue(controller.has720p())
     }
 
     @Test

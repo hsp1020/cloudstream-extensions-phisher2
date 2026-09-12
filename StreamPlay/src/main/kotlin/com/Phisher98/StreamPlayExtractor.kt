@@ -2083,19 +2083,7 @@ object StreamPlayExtractor : StreamPlay() {
                                         }
                                     } else if (source.startsWith("http", ignoreCase = true) && isValidM3u8(source, headers)) {
                                         val resolvedQ = getIndexQuality(quality).takeIf { it > Qualities.Unknown.value } ?: Qualities.P1080.value
-                                        callback(
-                                            newExtractorLink(
-                                                "VidEasy",
-                                                "VidEasy [${server.uppercase()}] [1080p]",
-                                                source,
-                                                ExtractorLinkType.M3U8
-                                            ) {
-                                                this.quality = resolvedQ
-                                                this.headers = headers
-                                                this.referer = "https://player.videasy.to/"
-                                            }
-                                        )
-                                        if (resolvedQ >= Qualities.P1080.value) {
+                                        if (resolvedQ >= Qualities.P720.value) {
                                             callback(
                                                 newExtractorLink(
                                                     "VidEasy",
@@ -2109,6 +2097,18 @@ object StreamPlayExtractor : StreamPlay() {
                                                 }
                                             )
                                         }
+                                        callback(
+                                            newExtractorLink(
+                                                "VidEasy",
+                                                "VidEasy [${server.uppercase()}] [1080p]",
+                                                source,
+                                                ExtractorLinkType.M3U8
+                                            ) {
+                                                this.quality = if (resolvedQ >= Qualities.P1080.value) resolvedQ else Qualities.P1080.value
+                                                this.headers = headers
+                                                this.referer = "https://player.videasy.to/"
+                                            }
+                                        )
                                     }
                                 } else {
                                     callback(
@@ -3444,18 +3444,6 @@ object StreamPlayExtractor : StreamPlay() {
                                             m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
                                         } else if (streamUrl.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(streamUrl, streamHeaders))) {
                                             found = true
-                                            callback(
-                                                newExtractorLink(
-                                                    source = "VidSrc",
-                                                    name = "$serverLabel [1080p]",
-                                                    url = streamUrl,
-                                                    type = streamType
-                                                ) {
-                                                    this.referer = referer
-                                                    this.quality = Qualities.P1080.value
-                                                    this.headers = streamHeaders
-                                                }
-                                            )
                                             if (isHls) {
                                                 callback(
                                                     newExtractorLink(
@@ -3470,6 +3458,18 @@ object StreamPlayExtractor : StreamPlay() {
                                                     }
                                                 )
                                             }
+                                            callback(
+                                                newExtractorLink(
+                                                    source = "VidSrc",
+                                                    name = "$serverLabel [1080p]",
+                                                    url = streamUrl,
+                                                    type = streamType
+                                                ) {
+                                                    this.referer = referer
+                                                    this.quality = Qualities.P1080.value
+                                                    this.headers = streamHeaders
+                                                }
+                                            )
                                         }
                                     }
                                     if (found) return@async true
@@ -3813,12 +3813,26 @@ object StreamPlayExtractor : StreamPlay() {
                                             } else null
 
                                             if (!m3u8Links.isNullOrEmpty()) {
-                                                m3u8Links.forEach(callback)
+                                                m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
                                             } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, streamHeaders))) {
+                                                if (isHls) {
+                                                    callback(
+                                                        newExtractorLink(
+                                                            source = "VidSrc CC",
+                                                            name = "VidSrc CC [720p]",
+                                                            url = normalizedStream,
+                                                            type = streamType
+                                                        ) {
+                                                            this.referer = embedUrl
+                                                            this.quality = Qualities.P720.value
+                                                            this.headers = streamHeaders
+                                                        }
+                                                    )
+                                                }
                                                 callback(
                                                     newExtractorLink(
                                                         source = "VidSrc CC",
-                                                        name = "VidSrc CC",
+                                                        name = "VidSrc CC [1080p]",
                                                         url = normalizedStream,
                                                         type = streamType
                                                     ) {
@@ -3891,18 +3905,6 @@ object StreamPlayExtractor : StreamPlay() {
                                             if (!m3u8Links.isNullOrEmpty()) {
                                                 m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
                                             } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, iframeStreamHeaders))) {
-                                                callback(
-                                                    newExtractorLink(
-                                                        source = "VidSrc CC",
-                                                        name = "VidSrc CC [1080p]",
-                                                        url = normalizedStream,
-                                                        type = streamType
-                                                    ) {
-                                                        this.referer = fullIframeUrl
-                                                        this.quality = Qualities.P1080.value
-                                                        this.headers = iframeStreamHeaders
-                                                    }
-                                                )
                                                 if (isHls) {
                                                     callback(
                                                         newExtractorLink(
@@ -3917,6 +3919,18 @@ object StreamPlayExtractor : StreamPlay() {
                                                         }
                                                     )
                                                 }
+                                                callback(
+                                                    newExtractorLink(
+                                                        source = "VidSrc CC",
+                                                        name = "VidSrc CC [1080p]",
+                                                        url = normalizedStream,
+                                                        type = streamType
+                                                    ) {
+                                                        this.referer = fullIframeUrl
+                                                        this.quality = Qualities.P1080.value
+                                                        this.headers = iframeStreamHeaders
+                                                    }
+                                                )
                                             }
                                             return@async true
                                         }
@@ -4058,12 +4072,26 @@ object StreamPlayExtractor : StreamPlay() {
                                         } else null
 
                                         if (!m3u8Links.isNullOrEmpty()) {
-                                            m3u8Links.forEach(callback)
+                                            m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
                                         } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, streamHeaders))) {
+                                            if (isHls) {
+                                                callback(
+                                                    newExtractorLink(
+                                                        source = "VidSrc To",
+                                                        name = "VidSrc To [720p]",
+                                                        url = normalizedStream,
+                                                        type = streamType
+                                                    ) {
+                                                        this.referer = embedUrl
+                                                        this.quality = Qualities.P720.value
+                                                        this.headers = streamHeaders
+                                                    }
+                                                )
+                                            }
                                             callback(
                                                 newExtractorLink(
                                                     source = "VidSrc To",
-                                                    name = "VidSrc To",
+                                                    name = "VidSrc To [1080p]",
                                                     url = normalizedStream,
                                                     type = streamType
                                                 ) {
@@ -4136,18 +4164,6 @@ object StreamPlayExtractor : StreamPlay() {
                                         if (!m3u8Links.isNullOrEmpty()) {
                                             m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
                                         } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, iframeStreamHeaders))) {
-                                            callback(
-                                                newExtractorLink(
-                                                    source = "VidSrc To",
-                                                    name = "VidSrc To [1080p]",
-                                                    url = normalizedStream,
-                                                    type = streamType
-                                                ) {
-                                                    this.referer = fullIframeUrl
-                                                    this.quality = Qualities.P1080.value
-                                                    this.headers = iframeStreamHeaders
-                                                }
-                                            )
                                             if (isHls) {
                                                 callback(
                                                     newExtractorLink(
@@ -4162,6 +4178,18 @@ object StreamPlayExtractor : StreamPlay() {
                                                     }
                                                 )
                                             }
+                                            callback(
+                                                newExtractorLink(
+                                                    source = "VidSrc To",
+                                                    name = "VidSrc To [1080p]",
+                                                    url = normalizedStream,
+                                                    type = streamType
+                                                ) {
+                                                    this.referer = fullIframeUrl
+                                                    this.quality = Qualities.P1080.value
+                                                    this.headers = iframeStreamHeaders
+                                                }
+                                            )
                                         }
                                         return@async true
                                     }
@@ -5127,19 +5155,7 @@ object StreamPlayExtractor : StreamPlay() {
                             )
                         }
                     } else if (cleanM3u8Url.startsWith("http", ignoreCase = true) && isValidM3u8(cleanM3u8Url, hlsHeaders)) {
-                        // Empty playlist from generator, emit direct M3U8 links for 1080p and 720p
-                        callback(
-                            newExtractorLink(
-                                "Vidlink",
-                                "Vidlink HLS [1080p]",
-                                url = cleanM3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = referer
-                                this.quality = Qualities.P1080.value
-                                this.headers = hlsHeaders
-                            }
-                        )
+                        // Empty playlist from generator, emit direct M3U8 links with 720p prioritized #1, then 1080p
                         callback(
                             newExtractorLink(
                                 "Vidlink",
@@ -5152,11 +5168,30 @@ object StreamPlayExtractor : StreamPlay() {
                                 this.headers = hlsHeaders
                             }
                         )
+                        callback(
+                            newExtractorLink(
+                                "Vidlink",
+                                "Vidlink HLS [1080p]",
+                                url = cleanM3u8Url,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = referer
+                                this.quality = Qualities.P1080.value
+                                this.headers = hlsHeaders
+                            }
+                        )
                     }
                 }
 
-                // 3. Parse direct MP4 stream qualities (1080p, 720p, 480p)
-                stream.qualities?.forEach { (qualityKey, qualityObj) ->
+                // 3. Parse direct MP4 stream qualities prioritized by SOTA quality hierarchy (720p > 1080p > 480p)
+                stream.qualities?.entries
+                    ?.sortedByDescending { (qualityKey, _) ->
+                        val qual = qualityKey?.let {
+                            StreamLinkOptimizer.extractQualityFromText(it).takeIf { q -> q > Qualities.Unknown.value } ?: getQualityFromName(it)
+                        } ?: Qualities.P1080.value
+                        StreamLinkOptimizer.getQualityPriorityScore(qual)
+                    }
+                    ?.forEach { (qualityKey, qualityObj) ->
                     val videoUrl = qualityObj?.url?.trim()
                     if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http", ignoreCase = true)) {
                         val qual = qualityKey?.let {
@@ -5372,24 +5407,24 @@ object StreamPlayExtractor : StreamPlay() {
                                         callback(
                                             newExtractorLink(
                                                 "VidFast",
-                                                "VidFast [$name] [1080p]",
-                                                finalUrl,
-                                                ExtractorLinkType.M3U8
-                                            ) {
-                                                this.referer = "$vidfastProApi/"
-                                                this.quality = Qualities.P1080.value
-                                                this.headers = linkHeaders
-                                            }
-                                        )
-                                        callback(
-                                            newExtractorLink(
-                                                "VidFast",
                                                 "VidFast [$name] [720p]",
                                                 finalUrl,
                                                 ExtractorLinkType.M3U8
                                             ) {
                                                 this.referer = "$vidfastProApi/"
                                                 this.quality = Qualities.P720.value
+                                                this.headers = linkHeaders
+                                            }
+                                        )
+                                        callback(
+                                            newExtractorLink(
+                                                "VidFast",
+                                                "VidFast [$name] [1080p]",
+                                                finalUrl,
+                                                ExtractorLinkType.M3U8
+                                            ) {
+                                                this.referer = "$vidfastProApi/"
+                                                this.quality = Qualities.P1080.value
                                                 this.headers = linkHeaders
                                             }
                                         )
@@ -5742,18 +5777,6 @@ object StreamPlayExtractor : StreamPlay() {
                                 if (!generated.isNullOrEmpty()) {
                                     generated.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
                                 } else if (link.isNotBlank() && link.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(link, linkHeaders))) {
-                                    callback(
-                                        newExtractorLink(
-                                            "HexaSU",
-                                            "HexaSU $name [1080p]",
-                                            link,
-                                            streamType
-                                        ) {
-                                            this.referer = chosenReferer
-                                            this.quality = Qualities.P1080.value
-                                            this.headers = linkHeaders
-                                        }
-                                    )
                                     if (!isDirectVideo) {
                                         callback(
                                             newExtractorLink(
@@ -5768,6 +5791,18 @@ object StreamPlayExtractor : StreamPlay() {
                                             }
                                         )
                                     }
+                                    callback(
+                                        newExtractorLink(
+                                            "HexaSU",
+                                            "HexaSU $name [1080p]",
+                                            link,
+                                            streamType
+                                        ) {
+                                            this.referer = chosenReferer
+                                            this.quality = Qualities.P1080.value
+                                            this.headers = linkHeaders
+                                        }
+                                    )
                                 }
                             } catch (e: Exception) {
                                 if (e is CancellationException) throw e
@@ -5885,19 +5920,7 @@ object StreamPlayExtractor : StreamPlay() {
                         m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
                     } else if (cleanedUrl.startsWith("http", ignoreCase = true) && isValidM3u8(cleanedUrl, linkHeaders)) {
                         val q = qualityHint ?: extractQuality(cleanedUrl)
-                        callback(
-                            newExtractorLink(
-                                source = "AutoEmbed",
-                                name = "AutoEmbed [1080p]",
-                                url = cleanedUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = refererUrl
-                                this.quality = q
-                                this.headers = linkHeaders
-                            }
-                        )
-                        if (q >= Qualities.P1080.value) {
+                        if (q >= Qualities.P720.value) {
                             callback(
                                 newExtractorLink(
                                     source = "AutoEmbed",
@@ -5911,6 +5934,18 @@ object StreamPlayExtractor : StreamPlay() {
                                 }
                             )
                         }
+                        callback(
+                            newExtractorLink(
+                                source = "AutoEmbed",
+                                name = "AutoEmbed [1080p]",
+                                url = cleanedUrl,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.referer = refererUrl
+                                this.quality = if (q >= Qualities.P1080.value) q else Qualities.P1080.value
+                                this.headers = linkHeaders
+                            }
+                        )
                     }
                 } else if (cleanedUrl.startsWith("http", ignoreCase = true)) {
                     val q = qualityHint ?: extractQuality(cleanedUrl)

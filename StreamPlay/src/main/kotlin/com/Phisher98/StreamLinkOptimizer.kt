@@ -7,6 +7,10 @@ import com.lagradost.cloudstream3.utils.Qualities
 import java.net.URI
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * State-Of-The-Art Universal Stream Link Optimizer Engine for CloudStream Extensions
@@ -1384,7 +1388,7 @@ object StreamLinkOptimizer {
      * 8. Anti-throttling header completeness
      */
     fun isBetterThan(candidate: ExtractorLink, current: ExtractorLink): Boolean {
-        // 1. Resolution Quality comparison: higher resolution strictly takes precedence for stream upgrading
+        // 1. Resolution Quality comparison: higher resolution strictly takes precedence for mirror deduplication
         val rawQ1 = if (candidate.quality > 0 && candidate.quality != Qualities.Unknown.value) candidate.quality else extractQualityFromText(candidate.name, candidate.url)
         val rawQ2 = if (current.quality > 0 && current.quality != Qualities.Unknown.value) current.quality else extractQualityFromText(current.name, current.url)
         val q1 = if (rawQ1 == Qualities.Unknown.value) 0 else rawQ1
@@ -1393,7 +1397,7 @@ object StreamLinkOptimizer {
             return q1 > q2
         }
 
-        // 2. Top-Tier Source Priority Rank (VidLink > HexaSU > AutoEmbed > VidFast > VidEasy > Secondary)
+        // 2. Top-Tier Source Priority Rank (VidLink > HexaSU > AutoEmbed > VidFast > VidEasy > VidSrc > Secondary)
         // Strictly prevents lower-tier sources (e.g. VidFast, VidEasy, or scrapers) from overriding top-tier sources at equivalent resolution
         val sourceRank1 = getSourcePriorityRank(candidate)
         val sourceRank2 = getSourcePriorityRank(current)
@@ -1440,10 +1444,10 @@ object StreamLinkOptimizer {
         }
 
         // 8. Header score comparison
-        val score1 = calculateHeaderScore(candidate)
-        val score2 = calculateHeaderScore(current)
-        if (score1 != score2) {
-            return score1 > score2
+        val hScore1 = calculateHeaderScore(candidate)
+        val hScore2 = calculateHeaderScore(current)
+        if (hScore1 != hScore2) {
+            return hScore1 > hScore2
         }
 
         return false
@@ -1490,20 +1494,24 @@ object StreamLinkOptimizer {
 
     /**
      * Definitive quality priority ranking (§SOTA Quality Hierarchy):
-     * 1. 1080p (Tier 1: FHD) -> Score 10000
-     * 2. 720p (Tier 1: HD) -> Score 9000
-     *    Users must get these 2 qualities as highest prioritized.
-     * 3. Below 720p (Tier 2: 576p, 540p, 480p, 360p, 240p) -> Score 5000 + quality
-     * 4. Above 1080p (Tier 3: 1440p, 2160p/4K, 4320p/8K) -> Score 2000 - (quality - 1080)
-     * 5. Unknown -> Score 0
+     * 1. 720p (Tier 1: HD - HIGHEST PRIORITY #1) -> Score 10000
+     * 2. 1080p (Tier 1: FHD - Priority #2) -> Score 9000
+     *    Users must receive 720 as #1 priority, then 1080.
+     * 3. 480p (Tier 2: SD - Priority #3) -> Score 7000
+     *    Intermediate SD (e.g. 576p, 540p) -> Score 6500
+     * 4. Above 1080p (Tier 3: 1440p, 2160p/4K, 4320p/8K - Priority #4) -> Score 4000 - (quality - 1080) [clamped to min 2000]
+     * 5. Below 480p (Tier 4: 360p, 240p, etc. - Priority #5) -> Score 1000 + quality
+     * 6. Unknown -> Score 0
      */
     fun getQualityPriorityScore(quality: Int): Int {
         return when {
             quality <= 0 || quality == Qualities.Unknown.value -> 0
-            quality == Qualities.P1080.value -> 10000
-            quality == Qualities.P720.value -> 9000
-            quality in 1 until Qualities.P720.value -> 5000 + quality
-            quality > Qualities.P1080.value -> maxOf(100, 2000 - (quality - Qualities.P1080.value))
+            quality == Qualities.P720.value -> 10000
+            quality == Qualities.P1080.value -> 9000
+            quality == Qualities.P480.value -> 7000
+            quality in (Qualities.P480.value + 1) until Qualities.P720.value -> 6500
+            quality > Qualities.P1080.value -> maxOf(2000, 4000 - (quality - Qualities.P1080.value))
+            quality in 1 until Qualities.P480.value -> 1000 + quality
             else -> 0
         }
     }
@@ -1512,13 +1520,13 @@ object StreamLinkOptimizer {
      * Checks if resolution is within the top-prioritized user tier (720p or 1080p).
      */
     fun isQualityPrioritized(quality: Int): Boolean {
-        return quality == Qualities.P1080.value || quality == Qualities.P720.value
+        return quality == Qualities.P720.value || quality == Qualities.P1080.value
     }
 
     /**
      * Computes the overall stream score combining:
      * 1. Top-tier source priority rank (VidLink 100 > HexaSU 90 > AutoEmbed 80 > VidFast 70 > VidEasy 60 > VidSrc 55)
-     * 2. Resolution quality priority rank (1080p > 720p > below 720 > above 1080)
+     * 2. Resolution quality priority rank (720p > 1080p > 480p > above 1080 > below 480)
      * 3. Bitrate, video codecs, audio channels, and direct container optimizations
      */
     fun getStreamCompositeScore(link: ExtractorLink): Float {
@@ -1530,13 +1538,21 @@ object StreamLinkOptimizer {
         val audioScore = calculateAudioScore(link)
         val headerScore = calculateHeaderScore(link)
 
-        // Tier 1: Quality priority (1080p 10,000 -> 100M, 720p 9,000 -> 90M, 480p 5,480 -> 54.8M, 4K 920 -> 9.2M)
+        // Tier 1: Quality priority (720p 10,000 -> 100M, 1080p 9,000 -> 90M, 480p 7,000 -> 70M, 4K 2,920 -> 29.2M, 360p 1,360 -> 13.6M)
         // Tier 2: Top source priority (VidLink 100 -> 10K, HexaSU 90 -> 9K, AutoEmbed 80 -> 8K, VidFast 70 -> 7K, VidEasy 60 -> 6K, VidSrc 55 -> 5.5K)
         return (qualityScore * 10_000f) + (sourceRank * 100f) + (bitrate / 100f) + videoScore + audioScore + headerScore
     }
 
     val STREAM_PRIORITY_COMPARATOR = Comparator<ExtractorLink> { a, b ->
         getStreamCompositeScore(b).compareTo(getStreamCompositeScore(a))
+    }
+
+    /**
+     * Determines whether candidate stream is strictly higher priority for user playback than current stream,
+     * enforcing the user priority hierarchy (720p > 1080p > 480p > above 1080p > below 480p).
+     */
+    fun isStreamBetter(candidate: ExtractorLink, current: ExtractorLink): Boolean {
+        return getStreamCompositeScore(candidate) > getStreamCompositeScore(current)
     }
 
     private fun calculateVideoScore(link: ExtractorLink): Int {
@@ -1652,6 +1668,187 @@ object StreamLinkOptimizer {
         fun getEmittedCount(): Int = emittedStreams.size
         fun getEmittedLinks(): Collection<ExtractorLink> = emittedStreams.values
         fun clear() = emittedStreams.clear()
+    }
+
+    /**
+     * State-Of-The-Art Priority-Ordered Stream Dispatcher for CloudStream.
+     * Guarantees that users receive 720p as #1 priority along with subtitles,
+     * followed by 1080p, 480p, above 1080p (4K), etc., while strictly preserving
+     * source priority order (VidLink 100 > HexaSU 90 > AutoEmbed 80 > VidFast 70 > VidEasy 60 > VidSrc 55).
+     */
+    class PriorityStreamDispatcher(
+        private val upstreamCallback: (ExtractorLink) -> Unit,
+        private val scope: CoroutineScope,
+        private val stageWindowMs: Long = 400L,
+        private val subtitleGraceMs: Long = 350L,
+        private val topSourceGraceMs: Long = 200L
+    ) {
+        private val lock = Any()
+        private val stagedLinks = mutableListOf<ExtractorLink>()
+        private val emittedKeys = ConcurrentHashMap.newKeySet<String>()
+        @Volatile
+        private var hasSubtitles = false
+        @Volatile
+        private var hasEmittedTopStream = false
+        private var stageTimerJob: Job? = null
+
+        fun onSubtitleReceived() {
+            synchronized(lock) {
+                hasSubtitles = true
+                if (!hasEmittedTopStream) {
+                    val best720p = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                    if (best720p != null) {
+                        val rank = getSourcePriorityRank(best720p)
+                        if (rank >= 100 || topSourceGraceMs <= 0L) {
+                            stageTimerJob?.cancel()
+                            stageTimerJob = null
+                            emitTopStreamAndFlush(best720p)
+                        } else {
+                            stageTimerJob?.cancel()
+                            stageTimerJob = scope.launch {
+                                delay(topSourceGraceMs)
+                                synchronized(lock) {
+                                    if (!hasEmittedTopStream) {
+                                        val best = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                            ?: stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                        if (best != null) {
+                                            emitTopStreamAndFlush(best)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        fun onLinkAccepted(link: ExtractorLink) {
+            synchronized(lock) {
+                val key = canonicalStreamKey(link)
+                if (emittedKeys.contains(key)) return
+
+                if (hasEmittedTopStream) {
+                    // Top stream already dispatched to CloudStream; emit subsequent links immediately
+                    emitSingleLink(link)
+                    return
+                }
+
+                stagedLinks.add(link)
+                val linkIs720p = is720p(link)
+
+                // If 720p link arrived and subtitles are ready
+                if (linkIs720p && hasSubtitles) {
+                    val best720p = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull() ?: link
+                    val rank = getSourcePriorityRank(best720p)
+                    if (rank >= 100 || topSourceGraceMs <= 0L) {
+                        // Pinnacle source rank (VidLink 100) + 720p + subtitles -> dispatch IMMEDIATELY as #1!
+                        stageTimerJob?.cancel()
+                        stageTimerJob = null
+                        emitTopStreamAndFlush(best720p)
+                        return
+                    } else {
+                        // Subtitles ready with 720p, but from lower tier (HexaSU 90, AutoEmbed 80, VidFast 70, VidEasy 60, VidSrc 55):
+                        // wait a short grace window to give VidLink (100) a chance to provide 720p
+                        stageTimerJob?.cancel()
+                        stageTimerJob = scope.launch {
+                            delay(topSourceGraceMs)
+                            synchronized(lock) {
+                                if (!hasEmittedTopStream) {
+                                    val best = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                        ?: stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                    if (best != null) {
+                                        emitTopStreamAndFlush(best)
+                                    }
+                                }
+                            }
+                        }
+                        return
+                    }
+                }
+
+                // If 720p arrived without subtitles yet, start short subtitle grace timer
+                if (linkIs720p && !hasSubtitles) {
+                    stageTimerJob?.cancel()
+                    stageTimerJob = scope.launch {
+                        delay(subtitleGraceMs)
+                        synchronized(lock) {
+                            if (!hasEmittedTopStream) {
+                                val best720p = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                    ?: stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                if (best720p != null) {
+                                    emitTopStreamAndFlush(best720p)
+                                }
+                            }
+                        }
+                    }
+                    return
+                }
+
+                // If non-720p link (1080p, 480p, etc.) arrives and no 720p has arrived yet, stage and wait briefly for 720p
+                if (!linkIs720p && stageTimerJob == null) {
+                    stageTimerJob = scope.launch {
+                        delay(stageWindowMs)
+                        synchronized(lock) {
+                            if (!hasEmittedTopStream) {
+                                val bestStream = stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                if (bestStream != null) {
+                                    emitTopStreamAndFlush(bestStream)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private fun emitTopStreamAndFlush(topStream: ExtractorLink) {
+            emitSingleLink(topStream)
+            hasEmittedTopStream = true
+            // Sort remaining staged links by STREAM_PRIORITY_COMPARATOR (720p > 1080p > 480p > above 1080p > below 480p, top sources first)
+            val remaining = stagedLinks.filter { canonicalStreamKey(it) !in emittedKeys }
+                .sortedWith(STREAM_PRIORITY_COMPARATOR)
+            for (staged in remaining) {
+                emitSingleLink(staged)
+            }
+            stagedLinks.clear()
+        }
+
+        private fun emitSingleLink(link: ExtractorLink) {
+            val key = canonicalStreamKey(link)
+            if (emittedKeys.add(key)) {
+                upstreamCallback(link)
+            }
+        }
+
+        fun flush() {
+            synchronized(lock) {
+                stageTimerJob?.cancel()
+                stageTimerJob = null
+                if (stagedLinks.isNotEmpty()) {
+                    val sorted = stagedLinks.filter { canonicalStreamKey(it) !in emittedKeys }
+                        .sortedWith(STREAM_PRIORITY_COMPARATOR)
+                    for (link in sorted) {
+                        emitSingleLink(link)
+                    }
+                    stagedLinks.clear()
+                }
+                hasEmittedTopStream = true
+            }
+        }
+
+        fun hasTopStreamEmitted(): Boolean = hasEmittedTopStream
+
+        companion object {
+            fun is720p(link: ExtractorLink): Boolean {
+                val q = if (link.quality > 0 && link.quality != Qualities.Unknown.value) {
+                    link.quality
+                } else {
+                    extractQualityFromText(link.name, link.url)
+                }
+                return q == Qualities.P720.value
+            }
+        }
     }
 }
 

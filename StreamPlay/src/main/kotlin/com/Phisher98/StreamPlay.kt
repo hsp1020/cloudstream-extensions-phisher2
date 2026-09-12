@@ -935,7 +935,14 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
         val linksFound = java.util.concurrent.atomic.AtomicInteger(0)
         val subtitlesFound = java.util.concurrent.atomic.AtomicInteger(0)
         val providersCompleted = java.util.concurrent.atomic.AtomicInteger(0)
-        val deduplicator = StreamLinkOptimizer.StreamDeduplicator(callback)
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = callback,
+            scope = this
+        )
+        val deduplicator = StreamLinkOptimizer.StreamDeduplicator(
+            upstreamCallback = { link -> dispatcher.onLinkAccepted(link) },
+            onUpgradeCallback = { link -> dispatcher.onLinkAccepted(link) }
+        )
         val emittedSubtitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
         val earlySatisfactionConfig = EarlySatisfactionConfig(
@@ -947,11 +954,15 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
             satisfyWithOneLinkIfSubsFound = false,
             requireSubtitles = true,
             requireDualQualities = true,
+            require720p = true,
             adaptiveTierEscalation = true,
             softGracePeriodAfterFirstLinkMs = 4500L,
             maxPipelineTimeoutMs = 18_000L
         )
         val earlyController = EarlySatisfactionController(earlySatisfactionConfig)
+        earlyController.onSatisfiedCallback = {
+            dispatcher.flush()
+        }
 
         fun emitLink(link: ExtractorLink): Boolean {
             val optimizedLink = StreamLinkOptimizer.optimize(link)
@@ -989,6 +1000,7 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
                 val cleanedSubtitle = SubtitleFile(lang = cleanedLang, url = url)
                 earlyController.onSubtitleEmitted(cleanedSubtitle)
                 subtitleCallback(cleanedSubtitle)
+                dispatcher.onSubtitleReceived()
                 true
             } else {
                 Log.d(TAG, "Skipped duplicate subtitle: ${subtitle.lang}")
@@ -1087,6 +1099,7 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
             Log.d(TAG, "🎯 Primary sources successfully resolved $primaryLinksFound streams. Strict fallback providers skipped.")
         }
 
+        dispatcher.flush()
         ProviderTelemetryManager.scheduleSave(sharedPref ?: companionSharedPref)
         val foundAnyResults = totalResultsFound() > 0
         Log.d(TAG, "✅ Finished: checked sources, ${linksFound.get()} links and ${subtitlesFound.get()} subtitles found")

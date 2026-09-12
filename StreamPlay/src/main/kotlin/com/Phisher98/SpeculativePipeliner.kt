@@ -61,12 +61,13 @@ data class PipelinedTask(
 data class EarlySatisfactionConfig(
     val minVerifiedLinks: Int = 2,
     val minQualityStreams: Int = 1,
-    val qualityThreshold: Int = Qualities.P1080.value,
+    val qualityThreshold: Int = Qualities.P720.value,
     val highBitrateThresholdKbps: Int = 2500,
     val minSubtitles: Int = 1,
     val satisfyWithOneLinkIfSubsFound: Boolean = true,
     val requireSubtitles: Boolean = false,
     val requireDualQualities: Boolean = false,
+    val require720p: Boolean = false,
     val tier1DelayMs: Long = 150L,
     val tier2DelayMs: Long = 1500L,
     val tier3DelayMs: Long = 3500L,
@@ -101,11 +102,11 @@ class EarlySatisfactionController(
 
     private fun trackLinkQuality(link: ExtractorLink) {
         val q = link.quality
-        val textQ = StreamLinkOptimizer.extractQualityFromText(link.name)
-        if (q == Qualities.P1080.value || textQ == Qualities.P1080.value || link.name.contains("1080", ignoreCase = true)) {
+        val textQ = StreamLinkOptimizer.extractQualityFromText(link.name, link.url)
+        if (q == Qualities.P1080.value || textQ == Qualities.P1080.value || link.name.contains("1080", ignoreCase = true) || link.url.contains("1080", ignoreCase = true)) {
             has1080Stream.set(true)
         }
-        if (q == Qualities.P720.value || textQ == Qualities.P720.value || link.name.contains("720", ignoreCase = true)) {
+        if (q == Qualities.P720.value || textQ == Qualities.P720.value || link.name.contains("720", ignoreCase = true) || link.url.contains("720", ignoreCase = true)) {
             has720Stream.set(true)
         }
     }
@@ -151,8 +152,9 @@ class EarlySatisfactionController(
         val bitrateKbps = StreamLinkOptimizer.parseBitrateKbpsFromText(link.name) ?: 0L
         val name = link.name
         val url = link.url
-        return quality >= config.qualityThreshold ||
-            quality >= Qualities.P1080.value ||
+        return quality == Qualities.P720.value ||
+            quality == Qualities.P1080.value ||
+            quality >= config.qualityThreshold ||
             bitrateKbps >= config.highBitrateThresholdKbps ||
             FOUR_K_WORD_REGEX.containsMatchIn(name) ||
             FHD_WORD_REGEX.containsMatchIn(name) ||
@@ -169,23 +171,27 @@ class EarlySatisfactionController(
         val links = linksFound.get()
         val qualityLinks = qualityLinksFound.get()
         val subs = subtitlesFound.get()
+        val subsMet = !config.requireSubtitles || subs >= config.minSubtitles
+        val p720Met = !config.require720p || has720Stream.get()
 
         val isEarlySatisfied = when {
             config.requireDualQualities -> {
                 val dualMet = has1080Stream.get() && has720Stream.get()
-                val subsMet = !config.requireSubtitles || subs >= config.minSubtitles
-                (dualMet && subsMet && links >= config.minVerifiedLinks) ||
-                (links >= 4 && subsMet) ||
-                (links >= 6)
+                (dualMet && subsMet && p720Met && links >= config.minVerifiedLinks) ||
+                (links >= 4 && subsMet && p720Met) ||
+                (links >= 6 && subsMet) ||
+                (links >= 8)
             }
-            // 1. 1 high-bitrate/quality stream (>=1080p)
-            qualityLinks >= config.minQualityStreams -> true
+            // 1. 1 high-bitrate/quality stream
+            qualityLinks >= config.minQualityStreams && subsMet && p720Met -> true
             // 2. 2 verified streams
-            links >= config.minVerifiedLinks && (!config.requireSubtitles || subs >= config.minSubtitles) -> true
+            links >= config.minVerifiedLinks && subsMet && p720Met -> true
             // 3. 1 stream + subtitles (if satisfyWithOneLinkIfSubsFound enabled)
-            config.satisfyWithOneLinkIfSubsFound && links >= 1 && subs >= config.minSubtitles -> true
+            config.satisfyWithOneLinkIfSubsFound && links >= 1 && subs >= config.minSubtitles && p720Met -> true
             // 4. Hard ceiling
-            links >= 4 -> true
+            links >= 4 && subsMet && p720Met -> true
+            links >= 6 && subsMet -> true
+            links >= 8 -> true
             else -> false
         }
 
