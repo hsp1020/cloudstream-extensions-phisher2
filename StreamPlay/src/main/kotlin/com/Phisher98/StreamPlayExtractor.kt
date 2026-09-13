@@ -2127,12 +2127,12 @@ object StreamPlayExtractor : StreamPlay() {
                             }
                         }
 
-                        val subtitlesArray = result.optJSONArray("subtitles")
+                        val subtitlesArray = result.optJSONArray("subtitles") ?: result.optJSONArray("tracks")
                         if (subtitlesArray != null) {
                             for (i in 0 until subtitlesArray.length()) {
                                 val obj = subtitlesArray.optJSONObject(i) ?: continue
-                                val rawSource = obj.optString("url").trim()
-                                val rawLanguage = obj.optString("language", "English")
+                                val rawSource = (obj.optString("url").takeIf { it.isNotBlank() } ?: obj.optString("file")).trim()
+                                val rawLanguage = (obj.optString("language").takeIf { it.isNotBlank() } ?: obj.optString("label", "English"))
                                 val subUrl = when {
                                     rawSource.isBlank() -> null
                                     rawSource.startsWith("http://", ignoreCase = true) || rawSource.startsWith("https://", ignoreCase = true) -> rawSource

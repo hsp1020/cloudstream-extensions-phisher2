@@ -35,6 +35,7 @@ import com.phisher98.StreamPlay.Companion.dahmerMoviesAPI
 import com.phisher98.StreamPlayExtractor.invokeSubtitleAPI
 import com.phisher98.StreamPlayExtractor.invokeWYZIESubs
 import com.phisher98.StreamPlayExtractor.token
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONObject
 
 
@@ -124,7 +125,7 @@ class StreamPlayStremioCatelog(
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    ): Boolean = coroutineScope {
         val res = parseJson<LoadData>(data)
         val imdb = res.resolveImdbId()
         val cinemeta = imdb?.let {
@@ -136,36 +137,59 @@ class StreamPlayStremioCatelog(
             title = cinemeta?.title
         )
 
-        val deduplicator = StreamLinkOptimizer.StreamDeduplicator(callback)
-        val optimizedCallback: (ExtractorLink) -> Unit = { link ->
-            deduplicator.emit(StreamLinkOptimizer.optimize(link))
-        }
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = callback,
+            scope = this
+        )
+        val deduplicator = StreamLinkOptimizer.StreamDeduplicator(
+            upstreamCallback = { link -> dispatcher.onLinkAccepted(link) },
+            onUpgradeCallback = { link -> dispatcher.onLinkAccepted(link) }
+        )
 
         val disabledProviderIds = getOrInitializeDisabledProviders(sharedPref)
         val providersList = buildProviders().filter { it.id !in disabledProviderIds }
         val earlySatisfactionConfig = EarlySatisfactionConfig(
             minVerifiedLinks = 2,
-            minQualityStreams = 1,
-            qualityThreshold = Qualities.P1080.value,
+            minQualityStreams = 2,
+            qualityThreshold = Qualities.P720.value,
             highBitrateThresholdKbps = 2500,
             minSubtitles = 1,
-            satisfyWithOneLinkIfSubsFound = true,
-            requireSubtitles = false
+            satisfyWithOneLinkIfSubsFound = false,
+            requireSubtitles = true,
+            requireDualQualities = true,
+            require720p = true,
+            adaptiveTierEscalation = true,
+            softGracePeriodAfterFirstLinkMs = 4500L,
+            maxPipelineTimeoutMs = 18_000L
         )
         val earlyController = EarlySatisfactionController(earlySatisfactionConfig)
+        earlyController.onSatisfiedCallback = {
+            dispatcher.flush()
+        }
 
         val catalogLinksFound = java.util.concurrent.atomic.AtomicInteger(0)
         val catalogSubsFound = java.util.concurrent.atomic.AtomicInteger(0)
         val trackedLinkCallback: (ExtractorLink) -> Unit = { link ->
             catalogLinksFound.incrementAndGet()
             val optimized = StreamLinkOptimizer.optimize(link)
-            earlyController.onLinkEmitted(optimized)
-            deduplicator.emit(optimized)
+            earlyController.onCandidateLink(optimized)
+            when (deduplicator.emitDetailed(optimized)) {
+                StreamLinkOptimizer.DeduplicationResult.NEW -> {
+                    earlyController.onLinkEmitted(optimized)
+                }
+                StreamLinkOptimizer.DeduplicationResult.UPGRADED -> {
+                    earlyController.onLinkUpgraded(optimized)
+                }
+                StreamLinkOptimizer.DeduplicationResult.DROPPED -> {
+                    // dropped
+                }
+            }
         }
         val trackedSubCallback: (SubtitleFile) -> Unit = { sub ->
             catalogSubsFound.incrementAndGet()
             earlyController.onSubtitleEmitted(sub)
             subtitleCallback(sub)
+            dispatcher.onSubtitleReceived()
         }
 
         val stremioAddons = StreamPlayStremioAddonSettings.getDynamicStremioMap(
@@ -216,8 +240,9 @@ class StreamPlayStremioCatelog(
             config = earlySatisfactionConfig,
             controller = earlyController
         )
+        dispatcher.flush()
 
-        return true
+        return@coroutineScope true
     }
 
     data class LoadData(

@@ -470,6 +470,10 @@ class StreamPlayAnime : MainAPI() {
             })
         }
 
+        earlyController.onSatisfiedCallback = {
+            dispatcher.flush()
+        }
+
         SpeculativePipeliner.executePipelined(
             tasks = tasks,
             config = earlySatisfactionConfig,

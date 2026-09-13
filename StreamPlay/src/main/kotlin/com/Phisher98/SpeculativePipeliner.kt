@@ -103,10 +103,10 @@ class EarlySatisfactionController(
     private fun trackLinkQuality(link: ExtractorLink) {
         val q = link.quality
         val textQ = StreamLinkOptimizer.extractQualityFromText(link.name, link.url)
-        if (q == Qualities.P1080.value || textQ == Qualities.P1080.value || link.name.contains("1080", ignoreCase = true) || link.url.contains("1080", ignoreCase = true)) {
+        if (q == Qualities.P1080.value || textQ == Qualities.P1080.value || StreamLinkOptimizer.PriorityStreamDispatcher.is1080p(link)) {
             has1080Stream.set(true)
         }
-        if (q == Qualities.P720.value || textQ == Qualities.P720.value || link.name.contains("720", ignoreCase = true) || link.url.contains("720", ignoreCase = true)) {
+        if (q == Qualities.P720.value || textQ == Qualities.P720.value || StreamLinkOptimizer.PriorityStreamDispatcher.is720p(link)) {
             has720Stream.set(true)
         }
     }
@@ -148,7 +148,11 @@ class EarlySatisfactionController(
     }
 
     fun isHighQualityVerifiedStream(link: ExtractorLink): Boolean {
-        val quality = link.quality
+        val quality = if (link.quality > 0 && link.quality != Qualities.Unknown.value) {
+            link.quality
+        } else {
+            StreamLinkOptimizer.extractQualityFromText(link.name, link.url)
+        }
         val bitrateKbps = StreamLinkOptimizer.parseBitrateKbpsFromText(link.name) ?: 0L
         val name = link.name
         val url = link.url

@@ -316,7 +316,9 @@ fun getIndexQualityTags(str: String?, fullTag: Boolean = false): String {
 }
 
 fun getIndexQuality(str: String?): Int {
-    return Regex("""\b(2160|1440|1080|720|576|540|480)\s*[pP]?\b""").find(str.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull()
+    val opt = StreamLinkOptimizer.extractQualityFromText(str)
+    if (opt > 0 && opt != Qualities.Unknown.value) return opt
+    return Regex("""(?i)(?:^|[^a-zA-Z0-9])(2160|1440|1080|720|576|540|480|360)\s*[pP]?(?:[^a-zA-Z0-9]|$)""").find(str.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull()
         ?: Qualities.Unknown.value
 }
 
