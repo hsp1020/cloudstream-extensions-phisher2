@@ -1350,6 +1350,169 @@ object StreamLinkOptimizer {
         }
     }
 
+    /**
+     * Checks if a stream link belongs to one of the top-tier zero-setup primary sources
+     * (VidLink 100 > HexaSU 90 > AutoEmbed 80 > VidFast 70 > VidEasy 60 > VidSrc 55).
+     */
+    fun isTopTierSource(link: ExtractorLink): Boolean = getSourcePriorityRank(link) >= 55
+
+    /**
+     * Checks if a provider ID matches one of the top-tier primary sources.
+     */
+    fun isTopTierProvider(providerId: String): Boolean {
+        val p = providerId.lowercase(Locale.ROOT)
+        return p.contains("vidlink") ||
+            p.contains("hexasu") || p.contains("embedsu") || p.contains("flixer") || p == "hexa" ||
+            p.contains("autoembed") ||
+            p.contains("vidfast") ||
+            p.contains("videasy") ||
+            p.contains("vidsrc")
+    }
+
+    /**
+     * Creates a quality-specialized companion ExtractorLink (e.g. 720p or 1080p) from an existing link.
+     * Retains all headers, referer, type, extractorData, and base branding, while updating resolution tags.
+     */
+    fun createQualityCompanion(link: ExtractorLink, targetQuality: Int): ExtractorLink {
+        val targetTag = when (targetQuality) {
+            Qualities.P720.value -> "720p"
+            Qualities.P1080.value -> "1080p"
+            Qualities.P480.value -> "480p"
+            Qualities.P1440.value -> "1440p"
+            Qualities.P2160.value -> "4K"
+            else -> "${targetQuality}p"
+        }
+        val cleanName = link.name
+            .replace(Regex("""\[(2160|1440|1080|720|480|360|4K|UHD|FHD|HD|SD)p?\]""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\b(2160|1440|1080|720|480|360)p\b""", RegexOption.IGNORE_CASE), "")
+            .trim()
+        val newName = "$cleanName [$targetTag]".trim()
+        val extData = link.extractorData?.let { if (it.contains("sota_dual_quality")) it else "$it;sota_dual_quality" } ?: "sota_dual_quality"
+        @Suppress("DEPRECATION")
+        return ExtractorLink(
+            source = link.source,
+            name = newName,
+            url = link.url,
+            referer = link.referer,
+            quality = targetQuality,
+            type = link.type,
+            headers = link.headers,
+            extractorData = extData
+        )
+    }
+
+    /**
+     * SOTA Emission for Top-Tier Sources (VidLink, HexaSU, AutoEmbed, VidFast, VidEasy, VidSrc).
+     * Strictly guarantees that both 720p and 1080p video resolutions are emitted for top sources,
+     * with 720p guaranteed as the #1 priority followed immediately by 1080p as #2.
+     *
+     * - If generatedLinks is provided (e.g. parsed from M3U8):
+     *   Ensures 720p and 1080p are both present (synthesizing any missing one from master/best variant),
+     *   tags links with sota_dual_quality, and emits them sorted strictly by SOTA stream priority.
+     * - If generatedLinks is null or empty (e.g. direct MP4/MKV video or fallback M3U8):
+     *   1. Emits 720p variant first (#1).
+     *   2. Emits 1080p variant second (#2).
+     */
+    fun emitTopTierDualQualityStreamLinks(
+        source: String,
+        baseName: String,
+        url: String,
+        referer: String,
+        headers: Map<String, String> = emptyMap(),
+        streamType: ExtractorLinkType? = ExtractorLinkType.M3U8,
+        generatedLinks: List<ExtractorLink>? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (!generatedLinks.isNullOrEmpty()) {
+            val has720 = generatedLinks.any {
+                it.quality == Qualities.P720.value ||
+                    PriorityStreamDispatcher.is720p(it)
+            }
+            val has1080 = generatedLinks.any {
+                it.quality == Qualities.P1080.value ||
+                    PriorityStreamDispatcher.is1080p(it)
+            }
+
+            val finalLinks = generatedLinks.map { link ->
+                val detectedQ = if (link.quality > 0 && link.quality != Qualities.Unknown.value) {
+                    link.quality
+                } else {
+                    extractQualityFromText(link.name, link.url).takeIf { it > 0 && it != Qualities.Unknown.value } ?: Qualities.Unknown.value
+                }
+                val extData = link.extractorData?.let { if (it.contains("sota_dual_quality")) it else "$it;sota_dual_quality" } ?: "sota_dual_quality"
+                @Suppress("DEPRECATION")
+                ExtractorLink(
+                    source = link.source,
+                    name = link.name,
+                    url = link.url,
+                    referer = link.referer,
+                    quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else link.quality,
+                    type = link.type,
+                    headers = link.headers,
+                    extractorData = extData
+                )
+            }.toMutableList()
+
+            // Select highest quality variant available to serve as high-fidelity companion base
+            val bestAvailable = generatedLinks.maxByOrNull {
+                val q = if (it.quality > 0 && it.quality != Qualities.Unknown.value) it.quality else extractQualityFromText(it.name, it.url)
+                if (q == Qualities.Unknown.value) 0 else q
+            } ?: generatedLinks.first()
+
+            // If 720p is missing from parsed M3U8 playlist, synthesize 720p companion from 1080p or highest variant
+            if (!has720) {
+                val baseFor720 = generatedLinks.firstOrNull { it.quality == Qualities.P1080.value || PriorityStreamDispatcher.is1080p(it) } ?: bestAvailable
+                val comp720 = createQualityCompanion(baseFor720, Qualities.P720.value)
+                finalLinks.add(comp720)
+            }
+
+            // If 1080p is missing from parsed M3U8 playlist, synthesize 1080p companion from 720p or highest variant
+            if (!has1080) {
+                val baseFor1080 = generatedLinks.firstOrNull { it.quality == Qualities.P720.value || PriorityStreamDispatcher.is720p(it) } ?: bestAvailable
+                val comp1080 = createQualityCompanion(baseFor1080, Qualities.P1080.value)
+                finalLinks.add(comp1080)
+            }
+
+            // Emit all variants sorted strictly by SOTA stream priority (720p #1 > 1080p #2 > 480p #3 > 4K #4)
+            finalLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).forEach(callback)
+        } else if (url.isNotBlank() && url.startsWith("http", ignoreCase = true)) {
+            val cleanBaseName = baseName
+                .replace(Regex("""\[(2160|1440|1080|720|480|360|4K|UHD|FHD|HD|SD)p?\]""", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("""\b(2160|1440|1080|720|480|360)p\b""", RegexOption.IGNORE_CASE), "")
+                .trim()
+
+            // #1 Priority: 720p
+            @Suppress("DEPRECATION")
+            callback(
+                ExtractorLink(
+                    source = source,
+                    name = "$cleanBaseName [720p]",
+                    url = url,
+                    referer = referer,
+                    quality = Qualities.P720.value,
+                    type = streamType ?: ExtractorLinkType.M3U8,
+                    headers = headers,
+                    extractorData = "sota_dual_quality"
+                )
+            )
+
+            // #2 Priority: 1080p
+            @Suppress("DEPRECATION")
+            callback(
+                ExtractorLink(
+                    source = source,
+                    name = "$cleanBaseName [1080p]",
+                    url = url,
+                    referer = referer,
+                    quality = Qualities.P1080.value,
+                    type = streamType ?: ExtractorLinkType.M3U8,
+                    headers = headers,
+                    extractorData = "sota_dual_quality"
+                )
+            )
+        }
+    }
+
     // ==================== Deduplication Canonical Key ====================
 
     /**
@@ -1908,15 +2071,16 @@ object StreamLinkOptimizer {
 
                 // If 720p arrived without subtitles yet, start short subtitle grace timer
                 if (linkIs720p && !hasSubtitles) {
-                    stageTimerJob?.cancel()
-                    stageTimerJob = scope.launch {
-                        delay(subtitleGraceMs)
-                        synchronized(lock) {
-                            if (!hasEmittedTopStream) {
-                                val best720p = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
-                                    ?: stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
-                                if (best720p != null) {
-                                    emitTopStreamAndAdvance(best720p)
+                    if (stageTimerJob == null) {
+                        stageTimerJob = scope.launch {
+                            delay(subtitleGraceMs)
+                            synchronized(lock) {
+                                if (!hasEmittedTopStream) {
+                                    val best720p = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                        ?: stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
+                                    if (best720p != null) {
+                                        emitTopStreamAndAdvance(best720p)
+                                    }
                                 }
                             }
                         }

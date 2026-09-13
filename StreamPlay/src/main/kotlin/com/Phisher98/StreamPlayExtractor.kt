@@ -130,6 +130,44 @@ object StreamPlayExtractor : StreamPlay() {
         }
     }
 
+    /**
+     * SOTA Emission for Top-Tier Sources (VidLink 100 > HexaSU 90 > AutoEmbed 80 > VidFast 70 > VidEasy 60 > VidSrc 55).
+     * Guarantees that EVERY top-tier stream provides BOTH 720p and 1080p, with 720p strictly prioritized as #1
+     * and 1080p as #2, followed by other qualities (480p, 4K, etc.) using STREAM_PRIORITY_COMPARATOR.
+     *
+     * - If generatedLinks is provided from generateM3u8:
+     *   1. Tags each link with sota_dual_quality.
+     *   2. Inspects the links for 720p and 1080p.
+     *   3. If 720p is missing, synthesizes a 720p companion from the best available link/master stream.
+     *   4. If 1080p is missing, synthesizes a 1080p companion from the best available link/master stream.
+     *   5. Dispatches all links sorted by STREAM_PRIORITY_COMPARATOR (guaranteeing 720p is emitted first, then 1080p).
+     *
+     * - If generatedLinks is null or empty (e.g. direct MP4/MKV video or fallback M3U8):
+     *   1. Emits 720p variant first (#1).
+     *   2. Emits 1080p variant second (#2).
+     */
+    fun emitTopTierDualQualityStreamLinks(
+        source: String,
+        baseName: String,
+        url: String,
+        referer: String,
+        headers: Map<String, String> = emptyMap(),
+        streamType: ExtractorLinkType? = ExtractorLinkType.M3U8,
+        generatedLinks: List<ExtractorLink>? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = source,
+            baseName = baseName,
+            url = url,
+            referer = referer,
+            headers = headers,
+            streamType = streamType,
+            generatedLinks = generatedLinks,
+            callback = callback
+        )
+    }
+
     suspend fun invoke2embed(
         imdbId: String?,
         season: Int?,
@@ -2039,6 +2077,30 @@ object StreamPlayExtractor : StreamPlay() {
                         val json = response.text
                         val result = runCatching { JSONObject(json).getJSONObject("result") }.getOrNull() ?: return@safeAmap
 
+                        val subtitlesArray = result.optJSONArray("subtitles") ?: result.optJSONArray("tracks")
+                        if (subtitlesArray != null) {
+                            for (i in 0 until subtitlesArray.length()) {
+                                val obj = subtitlesArray.optJSONObject(i) ?: continue
+                                val rawSource = (obj.optString("url").takeIf { it.isNotBlank() } ?: obj.optString("file")).trim()
+                                val rawLanguage = (obj.optString("language").takeIf { it.isNotBlank() } ?: obj.optString("label", "English"))
+                                val subUrl = when {
+                                    rawSource.isBlank() -> null
+                                    rawSource.startsWith("http://", ignoreCase = true) || rawSource.startsWith("https://", ignoreCase = true) -> rawSource
+                                    rawSource.startsWith("//") -> "https:$rawSource"
+                                    else -> null
+                                }
+                                if (!subUrl.isNullOrBlank()) {
+                                    val label = cleanSubtitleLabel(rawLanguage)
+                                    subtitleCallback(
+                                        newSubtitleFile(
+                                            label,
+                                            subUrl
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
                         val sourcesArray = result.optJSONArray("sources")
                         if (sourcesArray != null) {
                             for (i in 0 until sourcesArray.length()) {
@@ -2066,86 +2128,49 @@ object StreamPlayExtractor : StreamPlay() {
                                     }
 
                                     if (!m3u8Links.isNullOrEmpty()) {
-                                        m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach { genLink ->
+                                        val mappedLinks = m3u8Links.map { genLink ->
                                             val qualitySuffix = if (genLink.quality == Qualities.P720.value) " [720p]" else if (genLink.quality == Qualities.P1080.value) " [1080p]" else ""
-                                            callback(
-                                                newExtractorLink(
-                                                    "VidEasy",
-                                                    "VidEasy [${server.uppercase()}]$qualitySuffix",
-                                                    genLink.url,
-                                                    genLink.type
-                                                ) {
-                                                    this.quality = genLink.quality
-                                                    this.headers = headers
-                                                    this.referer = "https://player.videasy.to/"
-                                                }
-                                            )
-                                        }
-                                    } else if (source.startsWith("http", ignoreCase = true) && isValidM3u8(source, headers)) {
-                                        val resolvedQ = getIndexQuality(quality).takeIf { it > Qualities.Unknown.value } ?: Qualities.P1080.value
-                                        if (resolvedQ >= Qualities.P720.value) {
-                                            callback(
-                                                newExtractorLink(
-                                                    "VidEasy",
-                                                    "VidEasy [${server.uppercase()}] [720p]",
-                                                    source,
-                                                    ExtractorLinkType.M3U8
-                                                ) {
-                                                    this.quality = Qualities.P720.value
-                                                    this.headers = headers
-                                                    this.referer = "https://player.videasy.to/"
-                                                }
-                                            )
-                                        }
-                                        callback(
                                             newExtractorLink(
                                                 "VidEasy",
-                                                "VidEasy [${server.uppercase()}] [1080p]",
-                                                source,
-                                                ExtractorLinkType.M3U8
+                                                "VidEasy [${server.uppercase()}]$qualitySuffix",
+                                                genLink.url,
+                                                genLink.type
                                             ) {
-                                                this.quality = if (resolvedQ >= Qualities.P1080.value) resolvedQ else Qualities.P1080.value
+                                                this.quality = genLink.quality
                                                 this.headers = headers
                                                 this.referer = "https://player.videasy.to/"
                                             }
+                                        }
+                                        emitTopTierDualQualityStreamLinks(
+                                            source = "VidEasy",
+                                            baseName = "VidEasy [${server.uppercase()}]",
+                                            url = source,
+                                            referer = "https://player.videasy.to/",
+                                            headers = headers,
+                                            streamType = ExtractorLinkType.M3U8,
+                                            generatedLinks = mappedLinks,
+                                            callback = callback
+                                        )
+                                    } else if (source.startsWith("http", ignoreCase = true) && isValidM3u8(source, headers)) {
+                                        emitTopTierDualQualityStreamLinks(
+                                            source = "VidEasy",
+                                            baseName = "VidEasy [${server.uppercase()}]",
+                                            url = source,
+                                            referer = "https://player.videasy.to/",
+                                            headers = headers,
+                                            streamType = ExtractorLinkType.M3U8,
+                                            callback = callback
                                         )
                                     }
-                                } else {
-                                    callback(
-                                        newExtractorLink(
-                                            "VidEasy",
-                                            "VidEasy [${server.uppercase()}]",
-                                            source,
-                                            type
-                                        ) {
-                                            this.quality = getIndexQuality(quality)
-                                            this.headers = headers
-                                            this.referer = "https://player.videasy.to/"
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        val subtitlesArray = result.optJSONArray("subtitles") ?: result.optJSONArray("tracks")
-                        if (subtitlesArray != null) {
-                            for (i in 0 until subtitlesArray.length()) {
-                                val obj = subtitlesArray.optJSONObject(i) ?: continue
-                                val rawSource = (obj.optString("url").takeIf { it.isNotBlank() } ?: obj.optString("file")).trim()
-                                val rawLanguage = (obj.optString("language").takeIf { it.isNotBlank() } ?: obj.optString("label", "English"))
-                                val subUrl = when {
-                                    rawSource.isBlank() -> null
-                                    rawSource.startsWith("http://", ignoreCase = true) || rawSource.startsWith("https://", ignoreCase = true) -> rawSource
-                                    rawSource.startsWith("//") -> "https:$rawSource"
-                                    else -> null
-                                }
-                                if (!subUrl.isNullOrBlank()) {
-                                    val label = cleanSubtitleLabel(rawLanguage)
-                                    subtitleCallback(
-                                        newSubtitleFile(
-                                            label,
-                                            subUrl
-                                        )
+                                } else if (source.startsWith("http", ignoreCase = true)) {
+                                    emitTopTierDualQualityStreamLinks(
+                                        source = "VidEasy",
+                                        baseName = "VidEasy [${server.uppercase()}]",
+                                        url = source,
+                                        referer = "https://player.videasy.to/",
+                                        headers = headers,
+                                        streamType = type,
+                                        callback = callback
                                     )
                                 }
                             }
@@ -3441,34 +3466,26 @@ object StreamPlayExtractor : StreamPlay() {
 
                                         if (!m3u8Links.isNullOrEmpty()) {
                                             found = true
-                                            m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
+                                            emitTopTierDualQualityStreamLinks(
+                                                source = "VidSrc",
+                                                baseName = serverLabel,
+                                                url = streamUrl,
+                                                referer = referer,
+                                                headers = streamHeaders,
+                                                streamType = streamType,
+                                                generatedLinks = m3u8Links,
+                                                callback = callback
+                                            )
                                         } else if (streamUrl.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(streamUrl, streamHeaders))) {
                                             found = true
-                                            if (isHls) {
-                                                callback(
-                                                    newExtractorLink(
-                                                        source = "VidSrc",
-                                                        name = "$serverLabel [720p]",
-                                                        url = streamUrl,
-                                                        type = streamType
-                                                    ) {
-                                                        this.referer = referer
-                                                        this.quality = Qualities.P720.value
-                                                        this.headers = streamHeaders
-                                                    }
-                                                )
-                                            }
-                                            callback(
-                                                newExtractorLink(
-                                                    source = "VidSrc",
-                                                    name = "$serverLabel [1080p]",
-                                                    url = streamUrl,
-                                                    type = streamType
-                                                ) {
-                                                    this.referer = referer
-                                                    this.quality = Qualities.P1080.value
-                                                    this.headers = streamHeaders
-                                                }
+                                            emitTopTierDualQualityStreamLinks(
+                                                source = "VidSrc",
+                                                baseName = serverLabel,
+                                                url = streamUrl,
+                                                referer = referer,
+                                                headers = streamHeaders,
+                                                streamType = streamType,
+                                                callback = callback
                                             )
                                         }
                                     }
@@ -3813,33 +3830,25 @@ object StreamPlayExtractor : StreamPlay() {
                                             } else null
 
                                             if (!m3u8Links.isNullOrEmpty()) {
-                                                m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
+                                                emitTopTierDualQualityStreamLinks(
+                                                    source = "VidSrc CC",
+                                                    baseName = "VidSrc CC",
+                                                    url = normalizedStream,
+                                                    referer = embedUrl,
+                                                    headers = streamHeaders,
+                                                    streamType = streamType,
+                                                    generatedLinks = m3u8Links,
+                                                    callback = callback
+                                                )
                                             } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, streamHeaders))) {
-                                                if (isHls) {
-                                                    callback(
-                                                        newExtractorLink(
-                                                            source = "VidSrc CC",
-                                                            name = "VidSrc CC [720p]",
-                                                            url = normalizedStream,
-                                                            type = streamType
-                                                        ) {
-                                                            this.referer = embedUrl
-                                                            this.quality = Qualities.P720.value
-                                                            this.headers = streamHeaders
-                                                        }
-                                                    )
-                                                }
-                                                callback(
-                                                    newExtractorLink(
-                                                        source = "VidSrc CC",
-                                                        name = "VidSrc CC [1080p]",
-                                                        url = normalizedStream,
-                                                        type = streamType
-                                                    ) {
-                                                        this.referer = embedUrl
-                                                        this.quality = Qualities.P1080.value
-                                                        this.headers = streamHeaders
-                                                    }
+                                                emitTopTierDualQualityStreamLinks(
+                                                    source = "VidSrc CC",
+                                                    baseName = "VidSrc CC",
+                                                    url = normalizedStream,
+                                                    referer = embedUrl,
+                                                    headers = streamHeaders,
+                                                    streamType = streamType,
+                                                    callback = callback
                                                 )
                                             }
                                             return@async true
@@ -3902,34 +3911,26 @@ object StreamPlayExtractor : StreamPlay() {
                                                 }
                                             } else null
 
-                                            if (!m3u8Links.isNullOrEmpty()) {
-                                                m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
+                                             if (!m3u8Links.isNullOrEmpty()) {
+                                                emitTopTierDualQualityStreamLinks(
+                                                    source = "VidSrc CC",
+                                                    baseName = "VidSrc CC",
+                                                    url = normalizedStream,
+                                                    referer = fullIframeUrl,
+                                                    headers = iframeStreamHeaders,
+                                                    streamType = streamType,
+                                                    generatedLinks = m3u8Links,
+                                                    callback = callback
+                                                )
                                             } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, iframeStreamHeaders))) {
-                                                if (isHls) {
-                                                    callback(
-                                                        newExtractorLink(
-                                                            source = "VidSrc CC",
-                                                            name = "VidSrc CC [720p]",
-                                                            url = normalizedStream,
-                                                            type = streamType
-                                                        ) {
-                                                            this.referer = fullIframeUrl
-                                                            this.quality = Qualities.P720.value
-                                                            this.headers = iframeStreamHeaders
-                                                        }
-                                                    )
-                                                }
-                                                callback(
-                                                    newExtractorLink(
-                                                        source = "VidSrc CC",
-                                                        name = "VidSrc CC [1080p]",
-                                                        url = normalizedStream,
-                                                        type = streamType
-                                                    ) {
-                                                        this.referer = fullIframeUrl
-                                                        this.quality = Qualities.P1080.value
-                                                        this.headers = iframeStreamHeaders
-                                                    }
+                                                emitTopTierDualQualityStreamLinks(
+                                                    source = "VidSrc CC",
+                                                    baseName = "VidSrc CC",
+                                                    url = normalizedStream,
+                                                    referer = fullIframeUrl,
+                                                    headers = iframeStreamHeaders,
+                                                    streamType = streamType,
+                                                    callback = callback
                                                 )
                                             }
                                             return@async true
@@ -4072,33 +4073,25 @@ object StreamPlayExtractor : StreamPlay() {
                                         } else null
 
                                         if (!m3u8Links.isNullOrEmpty()) {
-                                            m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
+                                            emitTopTierDualQualityStreamLinks(
+                                                source = "VidSrc To",
+                                                baseName = "VidSrc To",
+                                                url = normalizedStream,
+                                                referer = embedUrl,
+                                                headers = streamHeaders,
+                                                streamType = streamType,
+                                                generatedLinks = m3u8Links,
+                                                callback = callback
+                                            )
                                         } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, streamHeaders))) {
-                                            if (isHls) {
-                                                callback(
-                                                    newExtractorLink(
-                                                        source = "VidSrc To",
-                                                        name = "VidSrc To [720p]",
-                                                        url = normalizedStream,
-                                                        type = streamType
-                                                    ) {
-                                                        this.referer = embedUrl
-                                                        this.quality = Qualities.P720.value
-                                                        this.headers = streamHeaders
-                                                    }
-                                                )
-                                            }
-                                            callback(
-                                                newExtractorLink(
-                                                    source = "VidSrc To",
-                                                    name = "VidSrc To [1080p]",
-                                                    url = normalizedStream,
-                                                    type = streamType
-                                                ) {
-                                                    this.referer = embedUrl
-                                                    this.quality = Qualities.P1080.value
-                                                    this.headers = streamHeaders
-                                                }
+                                            emitTopTierDualQualityStreamLinks(
+                                                source = "VidSrc To",
+                                                baseName = "VidSrc To",
+                                                url = normalizedStream,
+                                                referer = embedUrl,
+                                                headers = streamHeaders,
+                                                streamType = streamType,
+                                                callback = callback
                                             )
                                         }
                                         return@async true
@@ -4162,33 +4155,25 @@ object StreamPlayExtractor : StreamPlay() {
                                         } else null
 
                                         if (!m3u8Links.isNullOrEmpty()) {
-                                            m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
+                                            emitTopTierDualQualityStreamLinks(
+                                                source = "VidSrc To",
+                                                baseName = "VidSrc To",
+                                                url = normalizedStream,
+                                                referer = fullIframeUrl,
+                                                headers = iframeStreamHeaders,
+                                                streamType = streamType,
+                                                generatedLinks = m3u8Links,
+                                                callback = callback
+                                            )
                                         } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, iframeStreamHeaders))) {
-                                            if (isHls) {
-                                                callback(
-                                                    newExtractorLink(
-                                                        source = "VidSrc To",
-                                                        name = "VidSrc To [720p]",
-                                                        url = normalizedStream,
-                                                        type = streamType
-                                                    ) {
-                                                        this.referer = fullIframeUrl
-                                                        this.quality = Qualities.P720.value
-                                                        this.headers = iframeStreamHeaders
-                                                    }
-                                                )
-                                            }
-                                            callback(
-                                                newExtractorLink(
-                                                    source = "VidSrc To",
-                                                    name = "VidSrc To [1080p]",
-                                                    url = normalizedStream,
-                                                    type = streamType
-                                                ) {
-                                                    this.referer = fullIframeUrl
-                                                    this.quality = Qualities.P1080.value
-                                                    this.headers = iframeStreamHeaders
-                                                }
+                                            emitTopTierDualQualityStreamLinks(
+                                                source = "VidSrc To",
+                                                baseName = "VidSrc To",
+                                                url = normalizedStream,
+                                                referer = fullIframeUrl,
+                                                headers = iframeStreamHeaders,
+                                                streamType = streamType,
+                                                callback = callback
                                             )
                                         }
                                         return@async true
@@ -5138,60 +5123,47 @@ object StreamPlayExtractor : StreamPlay() {
                         }.getOrNull()
                     }
 
-                    if (!generatedLinks.isNullOrEmpty()) {
-                        generatedLinks.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach { genLink ->
-                            val finalHeaders = sanitizeVidlinkHeaders(genLink.headers)
-                            callback(
-                                newExtractorLink(
-                                    genLink.source,
-                                    genLink.name,
-                                    genLink.url,
-                                    genLink.type
-                                ) {
-                                    this.referer = finalHeaders["Referer"] ?: referer
-                                    this.quality = genLink.quality
-                                    this.headers = finalHeaders
-                                }
-                            )
+                    val mappedGenerated = generatedLinks?.map { genLink ->
+                        val finalHeaders = sanitizeVidlinkHeaders(genLink.headers)
+                        newExtractorLink(
+                            genLink.source,
+                            genLink.name,
+                            genLink.url,
+                            genLink.type
+                        ) {
+                            this.referer = finalHeaders["Referer"] ?: referer
+                            this.quality = genLink.quality
+                            this.headers = finalHeaders
                         }
-                    } else if (cleanM3u8Url.startsWith("http", ignoreCase = true) && isValidM3u8(cleanM3u8Url, hlsHeaders)) {
-                        // Empty playlist from generator, emit direct M3U8 links with 720p prioritized #1, then 1080p
-                        callback(
-                            newExtractorLink(
-                                "Vidlink",
-                                "Vidlink HLS [720p]",
-                                url = cleanM3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = referer
-                                this.quality = Qualities.P720.value
-                                this.headers = hlsHeaders
-                            }
+                    }
+
+                    if (!mappedGenerated.isNullOrEmpty()) {
+                        emitTopTierDualQualityStreamLinks(
+                            source = "Vidlink",
+                            baseName = "Vidlink HLS",
+                            url = cleanM3u8Url,
+                            referer = referer,
+                            headers = hlsHeaders,
+                            streamType = ExtractorLinkType.M3U8,
+                            generatedLinks = mappedGenerated,
+                            callback = callback
                         )
-                        callback(
-                            newExtractorLink(
-                                "Vidlink",
-                                "Vidlink HLS [1080p]",
-                                url = cleanM3u8Url,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = referer
-                                this.quality = Qualities.P1080.value
-                                this.headers = hlsHeaders
-                            }
+                    } else if (cleanM3u8Url.startsWith("http", ignoreCase = true) && isValidM3u8(cleanM3u8Url, hlsHeaders)) {
+                        emitTopTierDualQualityStreamLinks(
+                            source = "Vidlink",
+                            baseName = "Vidlink HLS",
+                            url = cleanM3u8Url,
+                            referer = referer,
+                            headers = hlsHeaders,
+                            streamType = ExtractorLinkType.M3U8,
+                            callback = callback
                         )
                     }
                 }
 
                 // 3. Parse direct MP4 stream qualities prioritized by SOTA quality hierarchy (720p > 1080p > 480p)
-                stream.qualities?.entries
-                    ?.sortedByDescending { (qualityKey, _) ->
-                        val qual = qualityKey?.let {
-                            StreamLinkOptimizer.extractQualityFromText(it).takeIf { q -> q > Qualities.Unknown.value } ?: getQualityFromName(it)
-                        } ?: Qualities.P1080.value
-                        StreamLinkOptimizer.getQualityPriorityScore(qual)
-                    }
-                    ?.forEach { (qualityKey, qualityObj) ->
+                val directQualitiesLinks = mutableListOf<ExtractorLink>()
+                stream.qualities?.entries?.forEach { (qualityKey, qualityObj) ->
                     val videoUrl = qualityObj?.url?.trim()
                     if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http", ignoreCase = true)) {
                         val qual = qualityKey?.let {
@@ -5208,7 +5180,7 @@ object StreamPlayExtractor : StreamPlay() {
                         if (cleanVideoUrl.startsWith("http", ignoreCase = true)) {
                             val effectiveRef = qualHeaders["Referer"] ?: ""
                             val effectiveQuality = qualityKey?.ifBlank { "1080p" } ?: "1080p"
-                            callback(
+                            directQualitiesLinks.add(
                                 newExtractorLink(
                                     "Vidlink",
                                     "Vidlink $effectiveQuality",
@@ -5222,6 +5194,19 @@ object StreamPlayExtractor : StreamPlay() {
                             )
                         }
                     }
+                }
+
+                if (directQualitiesLinks.isNotEmpty()) {
+                    emitTopTierDualQualityStreamLinks(
+                        source = "Vidlink",
+                        baseName = "Vidlink",
+                        url = directQualitiesLinks.first().url,
+                        referer = directQualitiesLinks.first().referer,
+                        headers = directQualitiesLinks.first().headers,
+                        streamType = directQualitiesLinks.first().type,
+                        generatedLinks = directQualitiesLinks,
+                        callback = callback
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -5402,46 +5387,49 @@ object StreamPlayExtractor : StreamPlay() {
                                     }
 
                                     if (!m3u8Links.isNullOrEmpty()) {
-                                        m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
-                                    } else if (finalUrl.startsWith("http", ignoreCase = true) && isValidM3u8(finalUrl, linkHeaders)) {
-                                        callback(
+                                        val mappedLinks = m3u8Links.map { genLink ->
+                                            val qualitySuffix = if (genLink.quality == Qualities.P720.value) " [720p]" else if (genLink.quality == Qualities.P1080.value) " [1080p]" else " [${genLink.quality}p]"
                                             newExtractorLink(
                                                 "VidFast",
-                                                "VidFast [$name] [720p]",
-                                                finalUrl,
-                                                ExtractorLinkType.M3U8
+                                                "VidFast [$name]$qualitySuffix",
+                                                genLink.url,
+                                                genLink.type
                                             ) {
-                                                this.referer = "$vidfastProApi/"
-                                                this.quality = Qualities.P720.value
+                                                this.quality = genLink.quality
                                                 this.headers = linkHeaders
+                                                this.referer = "$vidfastProApi/"
                                             }
+                                        }
+                                        emitTopTierDualQualityStreamLinks(
+                                            source = "VidFast",
+                                            baseName = "VidFast [$name]",
+                                            url = finalUrl,
+                                            referer = "$vidfastProApi/",
+                                            headers = linkHeaders,
+                                            streamType = ExtractorLinkType.M3U8,
+                                            generatedLinks = mappedLinks,
+                                            callback = callback
                                         )
-                                        callback(
-                                            newExtractorLink(
-                                                "VidFast",
-                                                "VidFast [$name] [1080p]",
-                                                finalUrl,
-                                                ExtractorLinkType.M3U8
-                                            ) {
-                                                this.referer = "$vidfastProApi/"
-                                                this.quality = Qualities.P1080.value
-                                                this.headers = linkHeaders
-                                            }
+                                    } else if (finalUrl.startsWith("http", ignoreCase = true) && isValidM3u8(finalUrl, linkHeaders)) {
+                                        emitTopTierDualQualityStreamLinks(
+                                            source = "VidFast",
+                                            baseName = "VidFast [$name]",
+                                            url = finalUrl,
+                                            referer = "$vidfastProApi/",
+                                            headers = linkHeaders,
+                                            streamType = ExtractorLinkType.M3U8,
+                                            callback = callback
                                         )
                                     }
                                 } else if (finalUrl.startsWith("http", ignoreCase = true)) {
-                                    val detectedQuality = StreamLinkOptimizer.extractQualityFromText(name, finalUrl).takeIf { it > Qualities.Unknown.value } ?: Qualities.P1080.value
-                                    callback(
-                                        newExtractorLink(
-                                            "VidFast",
-                                            "VidFast [$name]",
-                                            finalUrl,
-                                            streamType
-                                        ) {
-                                            this.referer = "$vidfastProApi/"
-                                            this.quality = detectedQuality
-                                            this.headers = linkHeaders
-                                        }
+                                    emitTopTierDualQualityStreamLinks(
+                                        source = "VidFast",
+                                        baseName = "VidFast [$name]",
+                                        url = finalUrl,
+                                        referer = "$vidfastProApi/",
+                                        headers = linkHeaders,
+                                        streamType = streamType,
+                                        callback = callback
                                     )
                                 }
                             } catch (e: Exception) {
@@ -5775,33 +5763,25 @@ object StreamPlayExtractor : StreamPlay() {
                                 } else null
 
                                 if (!generated.isNullOrEmpty()) {
-                                    generated.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
+                                    emitTopTierDualQualityStreamLinks(
+                                        source = "HexaSU",
+                                        baseName = "HexaSU $name",
+                                        url = link,
+                                        referer = chosenReferer,
+                                        headers = linkHeaders,
+                                        streamType = streamType,
+                                        generatedLinks = generated,
+                                        callback = callback
+                                    )
                                 } else if (link.isNotBlank() && link.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(link, linkHeaders))) {
-                                    if (!isDirectVideo) {
-                                        callback(
-                                            newExtractorLink(
-                                                "HexaSU",
-                                                "HexaSU $name [720p]",
-                                                link,
-                                                streamType
-                                            ) {
-                                                this.referer = chosenReferer
-                                                this.quality = Qualities.P720.value
-                                                this.headers = linkHeaders
-                                            }
-                                        )
-                                    }
-                                    callback(
-                                        newExtractorLink(
-                                            "HexaSU",
-                                            "HexaSU $name [1080p]",
-                                            link,
-                                            streamType
-                                        ) {
-                                            this.referer = chosenReferer
-                                            this.quality = Qualities.P1080.value
-                                            this.headers = linkHeaders
-                                        }
+                                    emitTopTierDualQualityStreamLinks(
+                                        source = "HexaSU",
+                                        baseName = "HexaSU $name",
+                                        url = link,
+                                        referer = chosenReferer,
+                                        headers = linkHeaders,
+                                        streamType = streamType,
+                                        callback = callback
                                     )
                                 }
                             } catch (e: Exception) {
@@ -5917,49 +5897,36 @@ object StreamPlayExtractor : StreamPlay() {
                     }
 
                     if (!m3u8Links.isNullOrEmpty()) {
-                        m3u8Links.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR).forEach(callback)
+                        emitTopTierDualQualityStreamLinks(
+                            source = "AutoEmbed",
+                            baseName = "AutoEmbed",
+                            url = cleanedUrl,
+                            referer = refererUrl,
+                            headers = linkHeaders,
+                            streamType = ExtractorLinkType.M3U8,
+                            generatedLinks = m3u8Links,
+                            callback = callback
+                        )
                     } else if (cleanedUrl.startsWith("http", ignoreCase = true) && isValidM3u8(cleanedUrl, linkHeaders)) {
-                        val q = qualityHint ?: extractQuality(cleanedUrl)
-                        if (q >= Qualities.P720.value) {
-                            callback(
-                                newExtractorLink(
-                                    source = "AutoEmbed",
-                                    name = "AutoEmbed [720p]",
-                                    url = cleanedUrl,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = refererUrl
-                                    this.quality = Qualities.P720.value
-                                    this.headers = linkHeaders
-                                }
-                            )
-                        }
-                        callback(
-                            newExtractorLink(
-                                source = "AutoEmbed",
-                                name = "AutoEmbed [1080p]",
-                                url = cleanedUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = refererUrl
-                                this.quality = if (q >= Qualities.P1080.value) q else Qualities.P1080.value
-                                this.headers = linkHeaders
-                            }
+                        emitTopTierDualQualityStreamLinks(
+                            source = "AutoEmbed",
+                            baseName = "AutoEmbed",
+                            url = cleanedUrl,
+                            referer = refererUrl,
+                            headers = linkHeaders,
+                            streamType = ExtractorLinkType.M3U8,
+                            callback = callback
                         )
                     }
                 } else if (cleanedUrl.startsWith("http", ignoreCase = true)) {
-                    val q = qualityHint ?: extractQuality(cleanedUrl)
-                    callback(
-                        newExtractorLink(
-                            source = "AutoEmbed",
-                            name = "AutoEmbed",
-                            url = cleanedUrl,
-                            type = streamType
-                        ) {
-                            this.referer = refererUrl
-                            this.quality = q
-                            this.headers = linkHeaders
-                        }
+                    emitTopTierDualQualityStreamLinks(
+                        source = "AutoEmbed",
+                        baseName = "AutoEmbed",
+                        url = cleanedUrl,
+                        referer = refererUrl,
+                        headers = linkHeaders,
+                        streamType = streamType,
+                        callback = callback
                     )
                 }
             }
@@ -6078,7 +6045,16 @@ object StreamPlayExtractor : StreamPlay() {
                                 } else {
                                     link
                                 }
-                                callback(taggedLink)
+                                emitTopTierDualQualityStreamLinks(
+                                    source = "AutoEmbed",
+                                    baseName = taggedLink.name,
+                                    url = taggedLink.url,
+                                    referer = taggedLink.referer,
+                                    headers = taggedLink.headers,
+                                    streamType = taggedLink.type,
+                                    generatedLinks = listOf(taggedLink),
+                                    callback = callback
+                                )
                             }
                         }.getOrDefault(false)
 

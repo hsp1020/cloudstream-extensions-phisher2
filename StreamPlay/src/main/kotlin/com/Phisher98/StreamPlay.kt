@@ -964,7 +964,9 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
             dispatcher.flush()
         }
 
-        fun emitLink(link: ExtractorLink): Boolean {
+        val topTierDualGuardedKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+        fun emitSingleLinkInternal(link: ExtractorLink): Boolean {
             val optimizedLink = StreamLinkOptimizer.optimize(link)
             earlyController.onCandidateLink(optimizedLink)
             return when (deduplicator.emitDetailed(optimizedLink)) {
@@ -982,6 +984,66 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
                     false
                 }
             }
+        }
+
+        fun emitLink(link: ExtractorLink): Boolean {
+            // Double-Lock Dual-Quality Guard:
+            // Ensures any top-tier stream (VidLink 100 > HexaSU 90 > AutoEmbed 80 > VidFast 70 > VidEasy 60 > VidSrc 55)
+            // entering emitLink provides BOTH 720p and 1080p, with 720p strictly prioritized as #1 and 1080p as #2.
+            if (StreamLinkOptimizer.isTopTierSource(link) && link.extractorData?.contains("sota_dual_quality") != true) {
+                val optimized = StreamLinkOptimizer.optimize(link)
+                val baseKey = StreamLinkOptimizer.canonicalStreamKey(optimized).substringBefore("#")
+                if (baseKey.isNotBlank() && topTierDualGuardedKeys.add(baseKey)) {
+                    val is720 = StreamLinkOptimizer.PriorityStreamDispatcher.is720p(optimized)
+                    val is1080 = StreamLinkOptimizer.PriorityStreamDispatcher.is1080p(optimized)
+
+                    return if (is720) {
+                        // 720p arrives: emit 720p first (#1), then synthesize and emit 1080p companion (#2)
+                        val extData = optimized.extractorData?.let { if (it.contains("sota_dual_quality")) it else "$it;sota_dual_quality" } ?: "sota_dual_quality"
+                        @Suppress("DEPRECATION")
+                        val tagged720 = ExtractorLink(
+                            source = optimized.source,
+                            name = optimized.name,
+                            url = optimized.url,
+                            referer = optimized.referer,
+                            quality = Qualities.P720.value,
+                            type = optimized.type,
+                            headers = optimized.headers,
+                            extractorData = extData
+                        )
+                        val r1 = emitSingleLinkInternal(tagged720)
+                        val comp1080 = StreamLinkOptimizer.createQualityCompanion(optimized, Qualities.P1080.value)
+                        emitSingleLinkInternal(comp1080)
+                        r1
+                    } else if (is1080) {
+                        // 1080p arrives: synthesize & emit 720p companion FIRST (#1), then emit 1080p second (#2)
+                        val comp720 = StreamLinkOptimizer.createQualityCompanion(optimized, Qualities.P720.value)
+                        emitSingleLinkInternal(comp720)
+                        val extData = optimized.extractorData?.let { if (it.contains("sota_dual_quality")) it else "$it;sota_dual_quality" } ?: "sota_dual_quality"
+                        @Suppress("DEPRECATION")
+                        val tagged1080 = ExtractorLink(
+                            source = optimized.source,
+                            name = optimized.name,
+                            url = optimized.url,
+                            referer = optimized.referer,
+                            quality = Qualities.P1080.value,
+                            type = optimized.type,
+                            headers = optimized.headers,
+                            extractorData = extData
+                        )
+                        emitSingleLinkInternal(tagged1080)
+                    } else {
+                        // Other quality arrives (e.g. 480p or unknown): synthesize 720p (#1), 1080p (#2), then original
+                        val comp720 = StreamLinkOptimizer.createQualityCompanion(optimized, Qualities.P720.value)
+                        emitSingleLinkInternal(comp720)
+                        val comp1080 = StreamLinkOptimizer.createQualityCompanion(optimized, Qualities.P1080.value)
+                        emitSingleLinkInternal(comp1080)
+                        emitSingleLinkInternal(optimized)
+                    }
+                }
+            }
+
+            return emitSingleLinkInternal(link)
         }
 
         fun emitSubtitle(subtitle: SubtitleFile): Boolean {

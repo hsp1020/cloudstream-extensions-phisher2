@@ -742,5 +742,189 @@ class DualQualityAndSotaHierarchyTest {
 
         dispatcher.flush()
     }
+
+    @Test
+    fun testEmitTopTierDualQualityStreamLinksForDirectVideo() = runBlocking {
+        val emitted = mutableListOf<ExtractorLink>()
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = "VidLink",
+            baseName = "VidLink Server 1",
+            url = "https://vidlink.pro/stream/movie.mp4",
+            referer = "https://vidlink.pro/",
+            headers = mapOf("Referer" to "https://vidlink.pro/"),
+            streamType = ExtractorLinkType.VIDEO,
+            generatedLinks = null,
+            callback = { emitted.add(it) }
+        )
+
+        assertEquals("Must emit exactly 2 links for direct video", 2, emitted.size)
+        assertEquals("Priority #1 must be 720p", Qualities.P720.value, emitted[0].quality)
+        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
+        assertTrue("Priority #1 must have 720p tag in name", emitted[0].name.contains("720p"))
+        assertTrue("Priority #2 must have 1080p tag in name", emitted[1].name.contains("1080p"))
+        assertTrue("Links must have sota_dual_quality tag in extractorData", emitted[0].extractorData?.contains("sota_dual_quality") == true)
+        assertTrue("Links must have sota_dual_quality tag in extractorData", emitted[1].extractorData?.contains("sota_dual_quality") == true)
+    }
+
+    @Test
+    fun testEmitTopTierDualQualityStreamLinksSynthesizes720WhenOnly1080Present() = runBlocking {
+        val emitted = mutableListOf<ExtractorLink>()
+        val link1080 = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/v.m3u8", Qualities.P1080.value, ExtractorLinkType.M3U8)
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = "HexaSU",
+            baseName = "HexaSU",
+            url = "https://hexa.su/v.m3u8",
+            referer = "https://hexa.su/",
+            streamType = ExtractorLinkType.M3U8,
+            generatedLinks = listOf(link1080),
+            callback = { emitted.add(it) }
+        )
+
+        assertEquals("Must emit 2 links (synthesized 720p + original 1080p)", 2, emitted.size)
+        assertEquals("Priority #1 must be 720p", Qualities.P720.value, emitted[0].quality)
+        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
+    }
+
+    @Test
+    fun testEmitTopTierDualQualityStreamLinksSynthesizes1080WhenOnly720Present() = runBlocking {
+        val emitted = mutableListOf<ExtractorLink>()
+        val link720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://autoembed.cc/v.m3u8", Qualities.P720.value, ExtractorLinkType.M3U8)
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = "AutoEmbed",
+            baseName = "AutoEmbed",
+            url = "https://autoembed.cc/v.m3u8",
+            referer = "https://autoembed.cc/",
+            streamType = ExtractorLinkType.M3U8,
+            generatedLinks = listOf(link720),
+            callback = { emitted.add(it) }
+        )
+
+        assertEquals("Must emit 2 links (original 720p + synthesized 1080p)", 2, emitted.size)
+        assertEquals("Priority #1 must be 720p", Qualities.P720.value, emitted[0].quality)
+        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
+    }
+
+    @Test
+    fun testEmitTopTierDualQualityStreamLinksAllSixTopSourcesDirectVideo() = runBlocking {
+        val topSources = listOf(
+            "VidLink" to 100,
+            "HexaSU" to 90,
+            "AutoEmbed" to 80,
+            "VidFast" to 70,
+            "VidEasy" to 60,
+            "VidSrc" to 55
+        )
+
+        for ((srcName, expectedRank) in topSources) {
+            val emitted = mutableListOf<ExtractorLink>()
+            StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+                source = srcName,
+                baseName = srcName,
+                url = "https://cdn.example.com/$srcName/stream.mp4",
+                referer = "https://example.com/",
+                streamType = ExtractorLinkType.VIDEO,
+                generatedLinks = null,
+                callback = { emitted.add(it) }
+            )
+
+            assertEquals("$srcName must emit 2 links", 2, emitted.size)
+            assertEquals("$srcName #1 must be 720p", Qualities.P720.value, emitted[0].quality)
+            assertEquals("$srcName #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
+            assertEquals("$srcName must match expected rank $expectedRank", expectedRank, StreamLinkOptimizer.getSourcePriorityRank(emitted[0]))
+            assertEquals("$srcName must match expected rank $expectedRank", expectedRank, StreamLinkOptimizer.getSourcePriorityRank(emitted[1]))
+        }
+    }
+
+    @Test
+    fun testEmitTopTierDualQualityStreamLinksSynthesizesFromHighestAvailableWhenBoth720And1080Missing() = runBlocking {
+        val emitted = mutableListOf<ExtractorLink>()
+        val link360 = createLink("HexaSU", "HexaSU [360p]", "https://hexa.su/360.m3u8", Qualities.P360.value, ExtractorLinkType.M3U8)
+        val link480 = createLink("HexaSU", "HexaSU [480p]", "https://hexa.su/480.m3u8", Qualities.P480.value, ExtractorLinkType.M3U8)
+
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = "HexaSU",
+            baseName = "HexaSU",
+            url = "https://hexa.su/master.m3u8",
+            referer = "https://hexa.su/",
+            streamType = ExtractorLinkType.M3U8,
+            generatedLinks = listOf(link360, link480),
+            callback = { emitted.add(it) }
+        )
+
+        assertEquals("Must emit 4 links (synthesized 720p, synthesized 1080p, original 480p, original 360p)", 4, emitted.size)
+        assertEquals("Priority #1 must be 720p", Qualities.P720.value, emitted[0].quality)
+        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
+        assertEquals("Priority #3 must be 480p", Qualities.P480.value, emitted[2].quality)
+        assertEquals("Priority #4 must be 360p", Qualities.P360.value, emitted[3].quality)
+
+        // Verify synthesized 720p and 1080p derived from the highest quality stream (480p), not 360p!
+        assertEquals("Synthesized 720p must inherit URL from highest available stream (480p)", link480.url, emitted[0].url)
+        assertEquals("Synthesized 1080p must inherit URL from highest available stream (480p)", link480.url, emitted[1].url)
+    }
+
+    @Test
+    fun testEmitTopTierDualQualityStreamLinksResolvesQualityZeroLink() = runBlocking {
+        val emitted = mutableListOf<ExtractorLink>()
+        // Link with quality = 0 (Qualities.Unknown.value) but name has "[720p]"
+        val linkWithZeroQuality = createLink("AutoEmbed", "AutoEmbed [720p]", "https://autoembed.cc/stream.m3u8", 0, ExtractorLinkType.M3U8)
+
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = "AutoEmbed",
+            baseName = "AutoEmbed",
+            url = "https://autoembed.cc/stream.m3u8",
+            referer = "https://autoembed.cc/",
+            streamType = ExtractorLinkType.M3U8,
+            generatedLinks = listOf(linkWithZeroQuality),
+            callback = { emitted.add(it) }
+        )
+
+        assertEquals("Must emit 2 links", 2, emitted.size)
+        assertEquals("Priority #1 must have resolved quality 720", Qualities.P720.value, emitted[0].quality)
+        assertEquals("Priority #2 must have synthesized quality 1080", Qualities.P1080.value, emitted[1].quality)
+    }
+
+    @Test
+    fun testCreateQualityCompanionFormattingAndTags() {
+        val original = createLink("VidLink", "VidLink Server 1 [1080p]", "https://vidlink.pro/stream.m3u8", Qualities.P1080.value)
+        val companion720 = StreamLinkOptimizer.createQualityCompanion(original, Qualities.P720.value)
+
+        assertEquals("VidLink Server 1 [720p]", companion720.name)
+        assertEquals(Qualities.P720.value, companion720.quality)
+        assertEquals(original.url, companion720.url)
+        assertEquals(original.source, companion720.source)
+        assertTrue("Companion must have sota_dual_quality tag", companion720.extractorData?.contains("sota_dual_quality") == true)
+    }
+
+    @Test
+    fun testPriorityStreamDispatcherDoesNotStarveOnMultiple720pStreams() = runBlocking {
+        val emitted = mutableListOf<ExtractorLink>()
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = { emitted.add(it) },
+            scope = this,
+            stageWindowMs = 300L,
+            subtitleGraceMs = 150L,
+            topSourceGraceMs = 100L
+        )
+
+        val link1 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/1.m3u8", Qualities.P720.value)
+        val link2 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://autoembed.cc/2.m3u8", Qualities.P720.value)
+        val link3 = createLink("VidFast", "VidFast [720p]", "https://vidfast.vc/3.m3u8", Qualities.P720.value)
+
+        dispatcher.onLinkAccepted(link1)
+        delay(60L)
+        dispatcher.onLinkAccepted(link2)
+        delay(60L)
+        dispatcher.onLinkAccepted(link3)
+
+        // Total elapsed since link1: 120ms. Wait for original 150ms timer to fire:
+        delay(80L) // Total 200ms elapsed (> 150ms)
+
+        assertTrue("Dispatcher must have emitted top stream without timer starvation", dispatcher.hasTopStreamEmitted())
+        assertTrue("Emitted links must not be empty", emitted.isNotEmpty())
+        assertEquals("Highest rank among arrived (HexaSU 90) must be emitted first", Qualities.P720.value, emitted[0].quality)
+        assertTrue("Emitted #1 must be HexaSU", emitted[0].source.contains("HexaSU"))
+
+        dispatcher.flush()
+    }
 }
 
