@@ -139,7 +139,8 @@ class StreamPlayStremioCatelog(
 
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
             upstreamCallback = callback,
-            scope = this
+            scope = this,
+            top720GraceMs = 350L
         )
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator(
             upstreamCallback = { link -> dispatcher.onLinkAccepted(link) },
@@ -163,26 +164,35 @@ class StreamPlayStremioCatelog(
             maxPipelineTimeoutMs = 18_000L
         )
         val earlyController = EarlySatisfactionController(earlySatisfactionConfig)
-        earlyController.onSatisfiedCallback = {
-            dispatcher.flush()
-        }
+        // Assumption: PriorityStreamDispatcher uses top720GraceMs and fhdGraceMs to ensure top sources
+        // emit 720p ahead of 1080p; dispatcher.flush() is called in the finally block after execution completes.
 
         val catalogLinksFound = java.util.concurrent.atomic.AtomicInteger(0)
         val catalogSubsFound = java.util.concurrent.atomic.AtomicInteger(0)
-        val trackedLinkCallback: (ExtractorLink) -> Unit = { link ->
-            catalogLinksFound.incrementAndGet()
+        val topTierDualGuardedKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+        fun emitSingleLinkInternal(link: ExtractorLink): Boolean {
             val optimized = StreamLinkOptimizer.optimize(link)
             earlyController.onCandidateLink(optimized)
-            when (deduplicator.emitDetailed(optimized)) {
+            return when (deduplicator.emitDetailed(optimized)) {
                 StreamLinkOptimizer.DeduplicationResult.NEW -> {
+                    catalogLinksFound.incrementAndGet()
                     earlyController.onLinkEmitted(optimized)
+                    true
                 }
                 StreamLinkOptimizer.DeduplicationResult.UPGRADED -> {
                     earlyController.onLinkUpgraded(optimized)
+                    true
                 }
                 StreamLinkOptimizer.DeduplicationResult.DROPPED -> {
-                    // dropped
+                    false
                 }
+            }
+        }
+
+        val trackedLinkCallback: (ExtractorLink) -> Unit = { link ->
+            StreamLinkOptimizer.processTopTierDualQualityStream(link, topTierDualGuardedKeys) { single ->
+                emitSingleLinkInternal(single)
             }
         }
         val trackedSubCallback: (SubtitleFile) -> Unit = { sub ->

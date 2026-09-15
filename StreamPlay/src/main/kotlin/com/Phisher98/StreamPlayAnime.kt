@@ -357,7 +357,8 @@ class StreamPlayAnime : MainAPI() {
 
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
             upstreamCallback = callback,
-            scope = this
+            scope = this,
+            top720GraceMs = 350L
         )
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator(
             upstreamCallback = { link -> dispatcher.onLinkAccepted(link) },
@@ -402,9 +403,8 @@ class StreamPlayAnime : MainAPI() {
             maxPipelineTimeoutMs = 18_000L
         )
         val earlyController = EarlySatisfactionController(earlySatisfactionConfig)
-        earlyController.onSatisfiedCallback = {
-            dispatcher.flush()
-        }
+        // Assumption: PriorityStreamDispatcher uses top720GraceMs and fhdGraceMs to ensure top sources
+        // emit 720p ahead of 1080p; dispatcher.flush() is called in the finally block after execution completes.
 
         val animeLinksFound = java.util.concurrent.atomic.AtomicInteger(0)
         val trackedCallback: (ExtractorLink) -> Unit = { link ->

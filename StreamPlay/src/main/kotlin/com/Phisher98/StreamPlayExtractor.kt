@@ -1979,10 +1979,9 @@ object StreamPlayExtractor : StreamPlay() {
                     "Referer" to "https://player.videasy.to/"
                 )
 
-                val servers = listOf("cdn", "m4uhd")
+                val servers = if (title.isNullOrBlank()) listOf("cdn") else listOf("cdn", "m4uhd")
 
-                val firstPass = quote(effectiveTitle)
-                val encTitle = quote(firstPass)
+                val encTitle = quote(effectiveTitle)
 
                 var activeApi = videasyAPI
                 var seed: String? = runCatching {
@@ -2151,7 +2150,7 @@ object StreamPlayExtractor : StreamPlay() {
                                             generatedLinks = mappedLinks,
                                             callback = callback
                                         )
-                                    } else if (source.startsWith("http", ignoreCase = true) && isValidM3u8(source, headers)) {
+                                    } else if (source.startsWith("http", ignoreCase = true)) {
                                         emitTopTierDualQualityStreamLinks(
                                             source = "VidEasy",
                                             baseName = "VidEasy [${server.uppercase()}]",
@@ -3476,7 +3475,7 @@ object StreamPlayExtractor : StreamPlay() {
                                                 generatedLinks = m3u8Links,
                                                 callback = callback
                                             )
-                                        } else if (streamUrl.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(streamUrl, streamHeaders))) {
+                                        } else if (streamUrl.startsWith("http", ignoreCase = true)) {
                                             found = true
                                             emitTopTierDualQualityStreamLinks(
                                                 source = "VidSrc",
@@ -3840,7 +3839,7 @@ object StreamPlayExtractor : StreamPlay() {
                                                     generatedLinks = m3u8Links,
                                                     callback = callback
                                                 )
-                                            } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, streamHeaders))) {
+                                            } else if (normalizedStream.startsWith("http", ignoreCase = true)) {
                                                 emitTopTierDualQualityStreamLinks(
                                                     source = "VidSrc CC",
                                                     baseName = "VidSrc CC",
@@ -3922,7 +3921,7 @@ object StreamPlayExtractor : StreamPlay() {
                                                     generatedLinks = m3u8Links,
                                                     callback = callback
                                                 )
-                                            } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, iframeStreamHeaders))) {
+                                            } else if (normalizedStream.startsWith("http", ignoreCase = true)) {
                                                 emitTopTierDualQualityStreamLinks(
                                                     source = "VidSrc CC",
                                                     baseName = "VidSrc CC",
@@ -4083,7 +4082,7 @@ object StreamPlayExtractor : StreamPlay() {
                                                 generatedLinks = m3u8Links,
                                                 callback = callback
                                             )
-                                        } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, streamHeaders))) {
+                                        } else if (normalizedStream.startsWith("http", ignoreCase = true)) {
                                             emitTopTierDualQualityStreamLinks(
                                                 source = "VidSrc To",
                                                 baseName = "VidSrc To",
@@ -4165,7 +4164,7 @@ object StreamPlayExtractor : StreamPlay() {
                                                 generatedLinks = m3u8Links,
                                                 callback = callback
                                             )
-                                        } else if (normalizedStream.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(normalizedStream, iframeStreamHeaders))) {
+                                        } else if (normalizedStream.startsWith("http", ignoreCase = true)) {
                                             emitTopTierDualQualityStreamLinks(
                                                 source = "VidSrc To",
                                                 baseName = "VidSrc To",
@@ -4216,6 +4215,7 @@ object StreamPlayExtractor : StreamPlay() {
     ) {
         withTimeoutOrNull(10000L) {
             coroutineScope {
+                // High priority: invokeVidSrcXyz runs immediately with in-memory decoders
                 val j1 = async {
                     try {
                         invokeVidSrcXyz(id, season, episode, subtitleCallback, callback, tmdbId)
@@ -4224,8 +4224,10 @@ object StreamPlayExtractor : StreamPlay() {
                         Log.w("StreamPlay", "VidSrcXyz sub-job failed: ${e.message}")
                     }
                 }
+                // Mitigate concurrent request storm: stagger secondary mirrors
                 val j2 = async {
                     try {
+                        delay(350L)
                         invokeVidSrcCc(id, season, episode, subtitleCallback, callback, tmdbId)
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
@@ -4234,6 +4236,7 @@ object StreamPlayExtractor : StreamPlay() {
                 }
                 val j3 = async {
                     try {
+                        delay(700L)
                         invokeVidSrcTo(id, season, episode, subtitleCallback, callback, tmdbId)
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
@@ -5055,7 +5058,10 @@ object StreamPlayExtractor : StreamPlay() {
                         val k = entry.key
                         val v = entry.value
                         (k.equals("Referer", ignoreCase = true) || k.equals("Origin", ignoreCase = true)) &&
-                            (v.contains("vidlink.pro", ignoreCase = true) || v.contains("embed", ignoreCase = true))
+                            (v.contains("vidlink.pro", ignoreCase = true) || v.contains("embed", ignoreCase = true) || v.isBlank())
+                    }
+                    result.entries.removeIf { entry ->
+                        entry.key.equals("User-Agent", ignoreCase = true) || entry.key.equals("Accept", ignoreCase = true)
                     }
                     result["User-Agent"] = cronetUserAgent
                     result["Accept"] = "*/*"
@@ -5148,7 +5154,7 @@ object StreamPlayExtractor : StreamPlay() {
                             generatedLinks = mappedGenerated,
                             callback = callback
                         )
-                    } else if (cleanM3u8Url.startsWith("http", ignoreCase = true) && isValidM3u8(cleanM3u8Url, hlsHeaders)) {
+                    } else if (cleanM3u8Url.startsWith("http", ignoreCase = true)) {
                         emitTopTierDualQualityStreamLinks(
                             source = "Vidlink",
                             baseName = "Vidlink HLS",
@@ -5324,24 +5330,32 @@ object StreamPlayExtractor : StreamPlay() {
                                 if (data.isBlank()) return@async
 
                                 val streamUrl = "$streamBase/$data"
-                                val streamEncrypted = retryTransient(1, 150L) {
-                                    val resp = app.post(streamUrl, headers = baseHeaders, timeout = 5L)
-                                    if (resp.isSuccessful && resp.text.isNotBlank()) resp.text else null
+                                val streamEncrypted = retryTransient(1, 100L) {
+                                    runCatching {
+                                        val resp = app.post(streamUrl, headers = baseHeaders, timeout = 4L)
+                                        if (resp.isSuccessful && resp.text.isNotBlank()) resp.text else null
+                                    }.getOrNull()
                                 }
 
                                 if (streamEncrypted.isNullOrBlank()) {
+                                    Log.d("StreamPlay", "VidFast server $name returned empty payload")
                                     return@async
                                 }
 
                                 val streamRoot = encDecApiSemaphore.withPermit {
-                                    retryTransient(1, 200L) {
-                                        app.post(
-                                            "$api/dec-vidfast",
-                                            json = mapOf("text" to streamEncrypted, "version" to version),
-                                            timeout = 5L
-                                        ).parsedSafe<VidFastServersStreamRoot>()
+                                    retryTransient(1, 150L) {
+                                        runCatching {
+                                            app.post(
+                                                "$api/dec-vidfast",
+                                                json = mapOf("text" to streamEncrypted, "version" to version),
+                                                timeout = 4L
+                                            ).parsedSafe<VidFastServersStreamRoot>()
+                                        }.getOrNull()
                                     }
-                                } ?: return@async
+                                } ?: run {
+                                    Log.d("StreamPlay", "VidFast server $name decryption failed")
+                                    return@async
+                                }
 
                                 val finalUrl = streamRoot.result.url
                                 if (finalUrl.isNullOrBlank()) return@async
@@ -5410,7 +5424,7 @@ object StreamPlayExtractor : StreamPlay() {
                                             generatedLinks = mappedLinks,
                                             callback = callback
                                         )
-                                    } else if (finalUrl.startsWith("http", ignoreCase = true) && isValidM3u8(finalUrl, linkHeaders)) {
+                                    } else if (finalUrl.startsWith("http", ignoreCase = true)) {
                                         emitTopTierDualQualityStreamLinks(
                                             source = "VidFast",
                                             baseName = "VidFast [$name]",
@@ -5683,13 +5697,17 @@ object StreamPlayExtractor : StreamPlay() {
                     for ((domain, referer) in domainTargets) {
                         val url = "$domain$path"
                         val targetHeaders = headers + mapOf("Referer" to referer)
-                        val response = suspendCancellable { safeGet(url, targetHeaders, timeout = 6L) }
-                        if (response != null && response.isSuccessful && response.code != 403 && response.code != 502 && response.text.isNotBlank()) {
+                        val response = suspendCancellable {
+                            withTimeoutOrNull(2500L) {
+                                safeGet(url, targetHeaders, timeout = 3L)
+                            }
+                        }
+                        if (response != null && response.isSuccessful && response.code !in listOf(403, 404, 500, 502, 503, 521, 522) && response.text.isNotBlank()) {
                             encrypted = response.text
                             chosenReferer = referer
                             break
                         } else {
-                            android.util.Log.d("StreamPlay", "HexaSU primary $domain unavailable (code: ${response?.code}), falling back to next endpoint")
+                            android.util.Log.d("StreamPlay", "HexaSU primary $domain unavailable (code: ${response?.code}), fast failover to next endpoint")
                         }
                     }
                     if (encrypted.isNotEmpty()) break
@@ -5773,7 +5791,7 @@ object StreamPlayExtractor : StreamPlay() {
                                         generatedLinks = generated,
                                         callback = callback
                                     )
-                                } else if (link.isNotBlank() && link.startsWith("http", ignoreCase = true) && (isDirectVideo || isValidM3u8(link, linkHeaders))) {
+                                } else if (link.isNotBlank() && link.startsWith("http", ignoreCase = true)) {
                                     emitTopTierDualQualityStreamLinks(
                                         source = "HexaSU",
                                         baseName = "HexaSU $name",
@@ -5907,7 +5925,7 @@ object StreamPlayExtractor : StreamPlay() {
                             generatedLinks = m3u8Links,
                             callback = callback
                         )
-                    } else if (cleanedUrl.startsWith("http", ignoreCase = true) && isValidM3u8(cleanedUrl, linkHeaders)) {
+                    } else if (cleanedUrl.startsWith("http", ignoreCase = true)) {
                         emitTopTierDualQualityStreamLinks(
                             source = "AutoEmbed",
                             baseName = "AutoEmbed",
@@ -5936,7 +5954,19 @@ object StreamPlayExtractor : StreamPlay() {
                 for (path in paths) {
                     val url = "$domain$path"
                     val headers = baseHeaders + mapOf("Referer" to "$domain/")
-                    val response = suspendCancellable { safeGet(url, headers = headers, timeout = 3L) } ?: continue
+                    val response = suspendCancellable {
+                        withTimeoutOrNull(2000L) {
+                            safeGet(url, headers = headers, timeout = 2L)
+                        }
+                    }
+                    if (response == null) {
+                        // Unreachable or timed out on this host, failover immediately without wasting budget on more paths
+                        break
+                    }
+                    if (response.code in listOf(403, 500, 502, 503, 521, 522)) {
+                        // Host is blocking or down, failover immediately to next domain
+                        break
+                    }
                     if (!response.isSuccessful || response.text.isBlank()) continue
 
                     val pageText = response.text

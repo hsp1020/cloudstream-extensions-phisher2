@@ -74,7 +74,8 @@ data class EarlySatisfactionConfig(
     val checkIntervalMs: Long = 20L,
     val adaptiveTierEscalation: Boolean = false,
     val softGracePeriodAfterFirstLinkMs: Long = 0L,
-    val maxPipelineTimeoutMs: Long = 30_000L
+    val maxPipelineTimeoutMs: Long = 30_000L,
+    val postSatisfactionGraceMs: Long = 3500L
 )
 
 /**
@@ -402,6 +403,21 @@ object SpeculativePipeliner {
             return trackedTasks.any { it.job.isActive && it.priorityScore > threshold }
         }
 
+        fun isTopTierTask(info: TrackedTaskInfo): Boolean {
+            return info.priorityScore >= 55f ||
+                StreamLinkOptimizer.isTopTierProvider(info.task.providerId) ||
+                info.task.priorityBoost >= 55f ||
+                (FAST_PROVIDER_BOOST[info.task.providerId] ?: 0f) >= 55f
+        }
+
+        fun isTopTierTask(task: PipelinedTask): Boolean {
+            val boost = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
+            return boost >= 55f ||
+                task.priorityBoost >= 55f ||
+                StreamLinkOptimizer.isTopTierProvider(task.providerId) ||
+                ProviderTelemetryManager.getPriorityScore(task.providerId) >= 55f
+        }
+
         fun cancelLowerOrEqualPriorityJobs() {
             val threshold = getMaxPriorityThreshold()
             for (info in trackedTasks) {
@@ -413,7 +429,7 @@ object SpeculativePipeliner {
 
         fun cancelActiveVideoJobs() {
             for (info in trackedTasks) {
-                if (info.job.isActive && info.task.isVideo) {
+                if (info.job.isActive && info.task.isVideo && !isTopTierTask(info)) {
                     info.job.cancel(CancellationException("Early video satisfaction achieved"))
                 }
             }
@@ -444,12 +460,15 @@ object SpeculativePipeliner {
         }
 
         fun launchTaskGroup(taskList: List<PipelinedTask>, targetList: CopyOnWriteArrayList<Job>): List<Job> {
-            if (controller.isSatisfied() && !hasHigherPriorityInFlight()) return emptyList()
+            val hasEligibleInGroup = taskList.any { !it.isVideo || isTopTierTask(it) }
+            if (controller.isSatisfied() && !hasHigherPriorityInFlight() && !hasEligibleInGroup) return emptyList()
             val allBroken = taskList.isNotEmpty() && taskList.all { ProviderTelemetryManager.isCircuitBroken(it.providerId) }
             return taskList.map { task ->
                 val taskPriority = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
+                val isTopTier = isTopTierTask(task)
+                val isSubtitle = !task.isVideo
                 launch(Dispatchers.IO) {
-                    if (controller.isSatisfied() && (!hasHigherPriorityInFlight() || taskPriority <= getMaxPriorityThreshold())) return@launch
+                    if (controller.isSatisfied() && (!hasHigherPriorityInFlight() || taskPriority <= getMaxPriorityThreshold()) && !isTopTier && !isSubtitle) return@launch
                     if (!allBroken && !ProviderTelemetryManager.canExecute(task.providerId)) {
                         Log.d(TAG, "Circuit breaker: skipping open provider ${task.providerId}")
                         return@launch
@@ -466,7 +485,7 @@ object SpeculativePipeliner {
 
                     try {
                         semaphore.withPermit {
-                            if (controller.isSatisfied() && (!hasHigherPriorityInFlight() || taskPriority <= getMaxPriorityThreshold())) {
+                            if (controller.isSatisfied() && (!hasHigherPriorityInFlight() || taskPriority <= getMaxPriorityThreshold()) && !isTopTier && !isSubtitle) {
                                 throw CancellationException("Early satisfaction achieved")
                             }
                             withTimeoutOrNull(timeout.milliseconds) {
@@ -522,6 +541,7 @@ object SpeculativePipeliner {
 
         val pipelineStartTime = System.currentTimeMillis()
         val firstLinkEmittedAt = java.util.concurrent.atomic.AtomicLong(0L)
+        var satisfactionTime: Long? = null
         val satisfactionWatcher = launch {
             while (isActive) {
                 val now = System.currentTimeMillis()
@@ -537,20 +557,29 @@ object SpeculativePipeliner {
                     if (graceElapsed >= config.softGracePeriodAfterFirstLinkMs) {
                         Log.d(TAG, "⚡ Soft grace period (${config.softGracePeriodAfterFirstLinkMs}ms) expired after first link. Marking satisfied.")
                         controller.markSatisfied()
-                        if (!hasHigherPriorityInFlight()) {
-                            cancelAllActiveJobs()
-                            break
-                        } else {
-                            cancelLowerOrEqualPriorityJobs()
-                        }
                     }
                 }
                 if (controller.isSatisfied()) {
-                    if (!hasHigherPriorityInFlight()) {
+                    if (satisfactionTime == null) {
+                        satisfactionTime = now
                         cancelActiveVideoJobs()
+                    }
+                    val hasActiveTopTierVideo = trackedTasks.any { it.job.isActive && it.task.isVideo && isTopTierTask(it) }
+                    if (!hasActiveTopTierVideo) {
                         break
                     } else {
-                        cancelLowerOrEqualPriorityJobs()
+                        val graceElapsed = now - (satisfactionTime ?: now)
+                        if (graceElapsed >= config.postSatisfactionGraceMs) {
+                            Log.d(TAG, "⏰ Post-satisfaction grace (${config.postSatisfactionGraceMs}ms) expired. Cancelling slow top-tier video jobs.")
+                            for (info in trackedTasks) {
+                                if (info.job.isActive && info.task.isVideo) {
+                                    info.job.cancel(CancellationException("Post-satisfaction grace expired for slow top-tier video jobs"))
+                                }
+                            }
+                            break
+                        } else if (hasHigherPriorityInFlight()) {
+                            cancelLowerOrEqualPriorityJobs()
+                        }
                     }
                 }
                 delay(config.checkIntervalMs.milliseconds)
@@ -563,25 +592,43 @@ object SpeculativePipeliner {
 
             // Stage 1: Launch Tier 1 after tier1DelayMs (150ms)
             // SOTA: If Tier 0 had zero tasks and adaptiveTierEscalation is enabled, launch Tier 1 at T = 0ms
-            if (!controller.isSatisfied() && tier1Tasks.isNotEmpty()) {
-                val delayTier1 = if (tier0Tasks.isEmpty() && config.adaptiveTierEscalation) 0L else config.tier1DelayMs
-                delayUnlessSatisfied(delayTier1, tier0Jobs)
-                if (!controller.isSatisfied()) {
+            val delayTier1 = if (tier0Tasks.isEmpty() && config.adaptiveTierEscalation) 0L else config.tier1DelayMs
+            if (delayTier1 <= 0L) {
+                if (tier1Tasks.isNotEmpty()) {
                     launchTaskGroup(tier1Tasks, tier1Jobs)
+                }
+            } else if (tier1Tasks.isNotEmpty()) {
+                delayUnlessSatisfied(delayTier1, tier0Jobs)
+                val eligibleTier1 = if (controller.isSatisfied() && !hasHigherPriorityInFlight()) {
+                    tier1Tasks.filter { !it.isVideo || isTopTierTask(it) }
+                } else {
+                    tier1Tasks
+                }
+                if (eligibleTier1.isNotEmpty()) {
+                    launchTaskGroup(eligibleTier1, tier1Jobs)
                 }
             }
 
             // Stage 2: Launch Tier 2 after tier2DelayMs (1500ms)
-            if (!controller.isSatisfied() && tier2Tasks.isNotEmpty()) {
+            if (tier2Tasks.isNotEmpty()) {
                 val delayTier2 = if (tier0Tasks.isEmpty() && tier1Tasks.isEmpty() && config.adaptiveTierEscalation) {
                     0L
                 } else {
                     val elapsed = System.currentTimeMillis() - pipelineStartTime
                     (config.tier2DelayMs - elapsed).coerceAtLeast(0L)
                 }
-                delayUnlessSatisfied(delayTier2, tier0Jobs + tier1Jobs)
-                if (!controller.isSatisfied()) {
+                if (delayTier2 <= 0L) {
                     launchTaskGroup(tier2Tasks, tier2Jobs)
+                } else {
+                    delayUnlessSatisfied(delayTier2, tier0Jobs + tier1Jobs)
+                    val eligibleTier2 = if (controller.isSatisfied() && !hasHigherPriorityInFlight()) {
+                        tier2Tasks.filter { !it.isVideo || isTopTierTask(it) }
+                    } else {
+                        tier2Tasks
+                    }
+                    if (eligibleTier2.isNotEmpty()) {
+                        launchTaskGroup(eligibleTier2, tier2Jobs)
+                    }
                 }
             }
 
@@ -593,7 +640,9 @@ object SpeculativePipeliner {
                     val elapsed2 = System.currentTimeMillis() - pipelineStartTime
                     (config.tier3DelayMs - elapsed2).coerceAtLeast(0L)
                 }
-                delayUnlessSatisfied(delayTier3, tier0Jobs + tier1Jobs + tier2Jobs)
+                if (delayTier3 > 0L) {
+                    delayUnlessSatisfied(delayTier3, tier0Jobs + tier1Jobs + tier2Jobs)
+                }
                 if (!controller.isSatisfied() && controller.getLinksCount() == 0) {
                     launchTaskGroup(tier3Tasks, tier3Jobs)
                 }
