@@ -7,12 +7,26 @@ import com.lagradost.cloudstream3.utils.Qualities
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class DualQualityAndSotaHierarchyTest {
+
+    @Before
+    fun setUp() {
+        ProviderTelemetryManager.clearAllForTesting()
+        DeviceProfiler.resetForTesting()
+    }
+
+    @After
+    fun tearDown() {
+        ProviderTelemetryManager.clearAllForTesting()
+        DeviceProfiler.resetForTesting()
+    }
 
     private fun createLink(
         source: String,
@@ -1277,7 +1291,8 @@ class DualQualityAndSotaHierarchyTest {
         val result = SpeculativePipeliner.executePipelined(
             tasks = tasks,
             config = config,
-            controller = controller
+            controller = controller,
+            maxConcurrencyOverride = 10
         )
 
         assertTrue("Pipeline should return true", result)
@@ -1478,6 +1493,80 @@ class DualQualityAndSotaHierarchyTest {
         dispatcher.onLinkAccepted(hexasu720)
         assertEquals("HexaSU 720p must emit immediately without waiting for rank 100", 2, emittedLinks.size)
         assertEquals(hexasu720, emittedLinks[1])
+
+        dispatcher.flush()
+    }
+
+    @Test
+    fun testPriorityStreamDispatcherDisabledProviderDoesNotStallLowerRankSources() = runBlocking {
+        val emittedLinks = mutableListOf<ExtractorLink>()
+        // VidLink (100) is DISABLED. Only HexaSU (90), AutoEmbed (80), etc. are active
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = { emittedLinks.add(it) },
+            scope = this,
+            stageWindowMs = 50L,
+            subtitleGraceMs = 50L,
+            topSourceGraceMs = 50L,
+            top720GraceMs = 500L,
+            activeTopRanks = setOf(90, 80, 70, 60, 55)
+        )
+
+        val hexasu720 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/720.m3u8", Qualities.P720.value)
+        val autoembed720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://autoembed.cc/720.m3u8", Qualities.P720.value)
+
+        // Subtitles present
+        dispatcher.onSubtitleReceived()
+
+        // HexaSU 720p arrives at t=0. Because VidLink 100 is disabled, HexaSU 90 is the top active rank
+        // and must NOT be stalled waiting for rank 100!
+        dispatcher.onLinkAccepted(hexasu720)
+        assertEquals("HexaSU 720p must emit immediately without waiting for disabled VidLink 100", 1, emittedLinks.size)
+        assertEquals(hexasu720, emittedLinks[0])
+
+        // AutoEmbed 720p arrives next. Since HexaSU already emitted, AutoEmbed emits immediately
+        dispatcher.onLinkAccepted(autoembed720)
+        assertEquals("AutoEmbed 720p must emit immediately", 2, emittedLinks.size)
+        assertEquals(autoembed720, emittedLinks[1])
+
+        dispatcher.flush()
+    }
+
+    @Test
+    fun testPriorityStreamDispatcherDynamicHold1080pWhile720pInFlightAndImmediateReleaseOnComplete() = runBlocking {
+        val emittedLinks = mutableListOf<ExtractorLink>()
+        var autoembedInFlight = true
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = { emittedLinks.add(it) },
+            scope = this,
+            stageWindowMs = 50L,
+            subtitleGraceMs = 50L,
+            topSourceGraceMs = 50L,
+            top720GraceMs = 1500L,
+            activeTopRanks = setOf(80, 70),
+            isRankInFlight = { rank -> if (rank == 80) autoembedInFlight else false }
+        )
+
+        val vidfast1080 = createLink("VidFast", "VidFast [1080p]", "https://vidfast.vc/1080.m3u8", Qualities.P1080.value)
+        val autoembed720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://autoembed.cc/720.m3u8", Qualities.P720.value)
+
+        dispatcher.onSubtitleReceived()
+
+        // VidFast 1080p arrives first at t=0, but higher-priority AutoEmbed 720p (rank 80) is in flight
+        dispatcher.onLinkAccepted(vidfast1080)
+        // Staged as topStream waiting for 720p or grace
+        delay(80L)
+        // Even after stage window, VidFast 1080p is held dynamically in pending1080Links because AutoEmbed 720p is in flight
+        assertTrue("VidFast 1080p must be held while higher-ranked 720p is in-flight", emittedLinks.isEmpty())
+
+        // AutoEmbed 720p arrives at t=100ms
+        dispatcher.onLinkAccepted(autoembed720)
+        autoembedInFlight = false
+        dispatcher.markRankCompleted(80)
+
+        // AutoEmbed 720p must emit first, and immediately unblock VidFast 1080p
+        assertEquals("AutoEmbed 720p and VidFast 1080p must both be emitted", 2, emittedLinks.size)
+        assertEquals("Priority #1 must be AutoEmbed 720p", autoembed720, emittedLinks[0])
+        assertEquals("Priority #2 must be VidFast 1080p", vidfast1080, emittedLinks[1])
 
         dispatcher.flush()
     }

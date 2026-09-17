@@ -4996,17 +4996,17 @@ object StreamPlayExtractor : StreamPlay() {
         try {
             if (tmdbId == null || (season != null && season != 0 && episode == null)) return
 
-            withTimeoutOrNull(9000L) {
+            withTimeoutOrNull(10000L) {
                 val encUrl = "https://enc-dec.app/api/enc-vidlink?text=$tmdbId"
-                val encResponse = encDecApiSemaphore.withPermit {
-                    retryTransient(1, 200L) {
-                        app.get(encUrl, timeout = 5L).text
+                val encData = encDecApiSemaphore.withPermit {
+                    retryTransient(4, 350L) {
+                        val resp = runCatching { app.get(encUrl, timeout = 7L) }.getOrNull()
+                        if (resp != null && resp.isSuccessful && resp.text.isNotBlank()) {
+                            val res = runCatching { JSONObject(resp.text).optString("result") }.getOrNull()
+                            if (!res.isNullOrBlank()) res else null
+                        } else null
                     }
                 } ?: return@withTimeoutOrNull
-
-                val encData = runCatching {
-                    JSONObject(encResponse).optString("result")
-                }.getOrNull().takeIf { !it.isNullOrEmpty() } ?: return@withTimeoutOrNull
 
                 val base = vidlink
 
@@ -5033,8 +5033,11 @@ object StreamPlayExtractor : StreamPlay() {
 
                 var stream: VidlinkStream? = null
                 for (apiUrl in apiUrls) {
-                    val epResponse = suspendCancellable {
-                        app.get(apiUrl, headers = headers, timeout = 6L).text
+                    val epResponse = retryTransient(2, 250L) {
+                        val resp = suspendCancellable {
+                            runCatching { app.get(apiUrl, headers = headers, timeout = 6L) }.getOrNull()
+                        }
+                        if (resp != null && resp.isSuccessful && resp.text.isNotBlank()) resp.text else null
                     } ?: continue
 
                     val data = runCatching {
@@ -5284,8 +5287,8 @@ object StreamPlayExtractor : StreamPlay() {
                 if (encodedText.isNullOrBlank()) return@withTimeoutOrNull
 
                 val encJson = encDecApiSemaphore.withPermit {
-                    retryTransient(1, 200L) {
-                        safeGet("$api/enc-vidfast?text=$encodedText&version=$version", timeout = 5L)
+                    retryTransient(2, 350L) {
+                        safeGet("$api/enc-vidfast?text=$encodedText&version=$version", timeout = 7L)
                             .parsedSafe<VidFastRes>()
                     }
                 } ?: return@withTimeoutOrNull
@@ -5300,17 +5303,17 @@ object StreamPlayExtractor : StreamPlay() {
                 baseHeaders["X-CSRF-Token"] = token
                 baseHeaders["X-Requested-With"] = "XMLHttpRequest"
 
-                val serversEncrypted = retryTransient(1, 200L) {
-                    val resp = app.post(serversUrl, headers = baseHeaders, timeout = 5L)
+                val serversEncrypted = retryTransient(2, 300L) {
+                    val resp = app.post(serversUrl, headers = baseHeaders, timeout = 7L)
                     if (resp.isSuccessful && resp.text.isNotBlank()) resp.text else null
                 } ?: return@withTimeoutOrNull
 
                 val serversRoot = encDecApiSemaphore.withPermit {
-                    retryTransient(1, 200L) {
+                    retryTransient(2, 350L) {
                         app.post(
                             "$api/dec-vidfast",
                             json = mapOf("text" to serversEncrypted, "version" to version),
-                            timeout = 5L
+                            timeout = 7L
                         ).parsedSafe<VidFastServers>()
                     }
                 } ?: return@withTimeoutOrNull
@@ -5321,8 +5324,9 @@ object StreamPlayExtractor : StreamPlay() {
 
                 val quality = Qualities.P1080.value
 
+                val vidfastServerSemaphore = Semaphore(2)
                 coroutineScope {
-                    serversList.mapIndexed { index, server ->
+                    serversList.take(4).mapIndexed { index, server ->
                         async {
                             try {
                                 val name = server.name.ifBlank { "Server ${index + 1}" }
@@ -5342,15 +5346,17 @@ object StreamPlayExtractor : StreamPlay() {
                                     return@async
                                 }
 
-                                val streamRoot = encDecApiSemaphore.withPermit {
-                                    retryTransient(1, 150L) {
-                                        runCatching {
-                                            app.post(
-                                                "$api/dec-vidfast",
-                                                json = mapOf("text" to streamEncrypted, "version" to version),
-                                                timeout = 4L
-                                            ).parsedSafe<VidFastServersStreamRoot>()
-                                        }.getOrNull()
+                                val streamRoot = vidfastServerSemaphore.withPermit {
+                                    encDecApiSemaphore.withPermit {
+                                        retryTransient(2, 300L) {
+                                            runCatching {
+                                                app.post(
+                                                    "$api/dec-vidfast",
+                                                    json = mapOf("text" to streamEncrypted, "version" to version),
+                                                    timeout = 6L
+                                                ).parsedSafe<VidFastServersStreamRoot>()
+                                            }.getOrNull()
+                                        }
                                     }
                                 } ?: run {
                                     Log.d("StreamPlay", "VidFast server $name decryption failed")
@@ -5661,7 +5667,7 @@ object StreamPlayExtractor : StreamPlay() {
                 val apiBase = "https://enc-dec.app/api"
 
                 val token = encDecApiSemaphore.withPermit {
-                    retryTransient(1, 200L) {
+                    retryTransient(3, 400L) {
                         safeGet("$apiBase/enc-hexa", headers = baseHeaders, timeout = 8L).parsedSafe<HexaEn>()
                     }
                 }?.result?.token ?: return@withTimeoutOrNull
@@ -5696,7 +5702,10 @@ object StreamPlayExtractor : StreamPlay() {
                 for (path in paths) {
                     for ((domain, referer) in domainTargets) {
                         val url = "$domain$path"
-                        val targetHeaders = headers + mapOf("Referer" to referer)
+                        val targetHeaders = headers + mapOf(
+                            "Referer" to referer,
+                            "Origin" to referer.removeSuffix("/")
+                        )
                         val response = suspendCancellable {
                             withTimeoutOrNull(2500L) {
                                 safeGet(url, targetHeaders, timeout = 3L)
@@ -5719,13 +5728,15 @@ object StreamPlayExtractor : StreamPlay() {
                     .toRequestBody("application/json".toMediaType())
 
                 val decryptRes = encDecApiSemaphore.withPermit {
-                    suspendCancellable {
-                        app.post(
-                            "$apiBase/dec-hexa",
-                            headers = mapOf("Content-Type" to "application/json"),
-                            requestBody = jsonBody,
-                            timeout = 8L
-                        ).parsedSafe<HexaResponse>()
+                    retryTransient(2, 400L) {
+                        suspendCancellable {
+                            app.post(
+                                "$apiBase/dec-hexa",
+                                headers = mapOf("Content-Type" to "application/json"),
+                                requestBody = jsonBody,
+                                timeout = 8L
+                            ).parsedSafe<HexaResponse>()
+                        }
                     }
                 } ?: return@withTimeoutOrNull
 
@@ -5955,8 +5966,8 @@ object StreamPlayExtractor : StreamPlay() {
                     val url = "$domain$path"
                     val headers = baseHeaders + mapOf("Referer" to "$domain/")
                     val response = suspendCancellable {
-                        withTimeoutOrNull(2000L) {
-                            safeGet(url, headers = headers, timeout = 2L)
+                        withTimeoutOrNull(2500L) {
+                            safeGet(url, headers = headers, timeout = 4L)
                         }
                     }
                     if (response == null) {

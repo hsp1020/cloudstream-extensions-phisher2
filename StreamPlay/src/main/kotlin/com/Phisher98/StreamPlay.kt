@@ -103,61 +103,6 @@ internal val NON_ANIME_PROVIDERS = setOf(
     "VidEasy"
 )
 
-internal val FAST_PROVIDER_BOOST = mapOf(
-    "vidlink" to 100f,
-    "Vidlink" to 100f,
-    "HexaSU" to 90f,
-    "hexasu" to 90f,
-    "flixersu" to 90f,
-    "flixer.su" to 90f,
-    "flixer" to 90f,
-    "embedsu" to 90f,
-    "embed.su" to 90f,
-    "autoembed" to 80f,
-    "AutoEmbed" to 80f,
-    "vidfast" to 70f,
-    "VidFast" to 70f,
-    "VidEasy" to 60f,
-    "videasy" to 60f,
-    "vidsrc" to 55f,
-    "VidSrc" to 55f,
-    "VidSrc (Unified)" to 55f,
-    "vidsrcxyz" to 55f,
-    "VidSrcXyz" to 55f,
-    "vidsrccc" to 55f,
-    "VidSrcCc" to 55f,
-    "vidsrcto" to 55f,
-    "VidSrcTo" to 55f,
-    "vidsrcme" to 55f,
-    "VidSrcMe" to 55f,
-    "vidsrcin" to 55f,
-    "VidSrcIn" to 55f,
-    "VidSrc In" to 55f,
-    "vidsrcpm" to 55f,
-    "VidSrcPm" to 55f,
-    "VidSrc Pm" to 55f,
-    "vidsrcnet" to 55f,
-    "VidSrcNet" to 55f,
-    "VidSrc Net" to 55f,
-    "WyZIESUB" to 50f,
-    "SubtitleAPI" to 50f,
-    "moviebox" to 50f,
-    "MovieBox" to 50f,
-    "MovieBox (Multi)" to 50f,
-    "rivestream" to 40f,
-    "RiveStream" to 40f,
-    "vidrock" to 30f,
-    "Vidrock" to 30f,
-    "moviesapi" to 20f,
-    "MoviesApi" to 20f,
-    "MoviesApi Club" to 20f,
-    "vidzeeapi" to 15f,
-    "vidzee" to 15f,
-    "Vidzee" to 15f,
-    "Vidzee API" to 15f,
-    "2Embed" to 10f,
-    "2embed" to 10f
-)
 
 open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
     override var name = "StreamPlay"
@@ -935,10 +880,19 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
         val linksFound = java.util.concurrent.atomic.AtomicInteger(0)
         val subtitlesFound = java.util.concurrent.atomic.AtomicInteger(0)
         val providersCompleted = java.util.concurrent.atomic.AtomicInteger(0)
+        val activeTopRanks = applicableProviders.mapNotNull {
+            val boost = FAST_PROVIDER_BOOST[it.id] ?: 0f
+            if (boost >= 55f) boost.toInt() else null
+        }.toSet()
+        val runningTopRanks = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+        runningTopRanks.addAll(activeTopRanks)
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
             upstreamCallback = callback,
             scope = this,
-            top720GraceMs = 350L
+            topSourceGraceMs = 1200L,
+            top720GraceMs = 2500L,
+            activeTopRanks = activeTopRanks,
+            isRankInFlight = { rank -> runningTopRanks.contains(rank) }
         )
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator(
             upstreamCallback = { link -> dispatcher.onLinkAccepted(link) },
@@ -1044,13 +998,22 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
                 taskTimeoutMs = providerTimeout,
                 priorityBoost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
             ) {
-                provider.invoke(
-                    res,
-                    { subtitle -> emitSubtitle(subtitle) },
-                    { link -> emitLink(link) },
-                    authToken,
-                    dahmerMoviesAPI
-                )
+                try {
+                    provider.invoke(
+                        res,
+                        { subtitle -> emitSubtitle(subtitle) },
+                        { link -> emitLink(link) },
+                        authToken,
+                        dahmerMoviesAPI
+                    )
+                } finally {
+                    val boost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
+                    if (boost >= 55f) {
+                        val rank = boost.toInt()
+                        runningTopRanks.remove(rank)
+                        dispatcher.markRankCompleted(rank)
+                    }
+                }
             }
         } + stremioAddons.map { (addonId, addon) ->
             PipelinedTask(

@@ -61,18 +61,21 @@ data class PipelinedTask(
 data class EarlySatisfactionConfig(
     val minVerifiedLinks: Int = 2,
     val minQualityStreams: Int = 1,
-    val qualityThreshold: Int = Qualities.P1080.value,
+    val qualityThreshold: Int = Qualities.P720.value,
     val highBitrateThresholdKbps: Int = 2500,
     val minSubtitles: Int = 1,
     val satisfyWithOneLinkIfSubsFound: Boolean = true,
     val requireSubtitles: Boolean = false,
+    val requireDualQualities: Boolean = false,
+    val require720p: Boolean = false,
     val tier1DelayMs: Long = 150L,
     val tier2DelayMs: Long = 1500L,
     val tier3DelayMs: Long = 3500L,
     val checkIntervalMs: Long = 20L,
     val adaptiveTierEscalation: Boolean = false,
     val softGracePeriodAfterFirstLinkMs: Long = 0L,
-    val maxPipelineTimeoutMs: Long = 30_000L
+    val maxPipelineTimeoutMs: Long = 30_000L,
+    val postSatisfactionGraceMs: Long = 3500L
 )
 
 /**
@@ -82,17 +85,38 @@ class EarlySatisfactionController(
     val config: EarlySatisfactionConfig = EarlySatisfactionConfig()
 ) {
     private val linksFound = AtomicInteger(0)
+    private val candidateLinksFound = AtomicInteger(0)
     private val qualityLinksFound = AtomicInteger(0)
     private val subtitlesFound = AtomicInteger(0)
+    private val has1080Stream = AtomicBoolean(false)
+    private val has720Stream = AtomicBoolean(false)
     private val satisfied = AtomicBoolean(false)
+    private val maxEmittedPriority = java.util.concurrent.atomic.AtomicReference<Float>(0f)
+
+    @Volatile
+    var onSatisfiedCallback: (() -> Unit)? = null
 
     companion object {
         private val FOUR_K_WORD_REGEX = Regex("""\b(?:4k|2160p?|uhd)\b""", RegexOption.IGNORE_CASE)
         private val FHD_WORD_REGEX = Regex("""\b(?:1080p?|fhd)\b""", RegexOption.IGNORE_CASE)
     }
 
+    private fun trackLinkQuality(link: ExtractorLink) {
+        val q = link.quality
+        val textQ = StreamLinkOptimizer.extractQualityFromText(link.name, link.url)
+        if (q == Qualities.P1080.value || textQ == Qualities.P1080.value || StreamLinkOptimizer.PriorityStreamDispatcher.is1080p(link)) {
+            has1080Stream.set(true)
+        }
+        if (q == Qualities.P720.value || textQ == Qualities.P720.value || StreamLinkOptimizer.PriorityStreamDispatcher.is720p(link)) {
+            has720Stream.set(true)
+        }
+    }
+
     fun onLinkEmitted(link: ExtractorLink): Boolean {
         linksFound.incrementAndGet()
+        val priority = StreamLinkOptimizer.getSourcePriorityRank(link).toFloat()
+        maxEmittedPriority.accumulateAndGet(priority) { prev, cur -> maxOf(prev, cur) }
+        trackLinkQuality(link)
         if (isHighQualityVerifiedStream(link)) {
             qualityLinksFound.incrementAndGet()
         }
@@ -101,12 +125,22 @@ class EarlySatisfactionController(
     }
 
     fun onLinkUpgraded(link: ExtractorLink): Boolean {
+        val priority = StreamLinkOptimizer.getSourcePriorityRank(link).toFloat()
+        maxEmittedPriority.accumulateAndGet(priority) { prev, cur -> maxOf(prev, cur) }
+        trackLinkQuality(link)
         if (isHighQualityVerifiedStream(link)) {
             qualityLinksFound.incrementAndGet()
         }
         checkSatisfaction()
         return isSatisfied()
     }
+
+    fun getMaxEmittedPriority(): Float = maxEmittedPriority.get()
+
+    fun has1080p(): Boolean = has1080Stream.get()
+    fun has720p(): Boolean = has720Stream.get()
+    fun hasBoth720And1080(): Boolean = has1080Stream.get() && has720Stream.get()
+    fun hasSubtitles(): Boolean = subtitlesFound.get() >= config.minSubtitles
 
     fun onSubtitleEmitted(subtitle: SubtitleFile): Boolean {
         subtitlesFound.incrementAndGet()
@@ -115,18 +149,22 @@ class EarlySatisfactionController(
     }
 
     fun isHighQualityVerifiedStream(link: ExtractorLink): Boolean {
-        val quality = link.quality
+        val quality = if (link.quality > 0 && link.quality != Qualities.Unknown.value) {
+            link.quality
+        } else {
+            StreamLinkOptimizer.extractQualityFromText(link.name, link.url)
+        }
         val bitrateKbps = StreamLinkOptimizer.parseBitrateKbpsFromText(link.name) ?: 0L
         val name = link.name
         val url = link.url
-        return quality >= config.qualityThreshold ||
-            quality >= Qualities.P1080.value ||
+        return quality == Qualities.P720.value ||
+            quality == Qualities.P1080.value ||
+            quality >= config.qualityThreshold ||
             bitrateKbps >= config.highBitrateThresholdKbps ||
             FOUR_K_WORD_REGEX.containsMatchIn(name) ||
             FHD_WORD_REGEX.containsMatchIn(name) ||
             (quality >= Qualities.P720.value && (
                 url.contains("pixeldrain", ignoreCase = true) ||
-                url.contains("febbox", ignoreCase = true) ||
                 url.contains("debrid", ignoreCase = true) ||
                 url.contains("real-debrid", ignoreCase = true)
             ))
@@ -138,37 +176,118 @@ class EarlySatisfactionController(
         val links = linksFound.get()
         val qualityLinks = qualityLinksFound.get()
         val subs = subtitlesFound.get()
+        val subsMet = !config.requireSubtitles || subs >= config.minSubtitles
+        val p720Met = !config.require720p || has720Stream.get()
 
         val isEarlySatisfied = when {
-            // 1. 1 high-bitrate/quality stream (>=1080p)
-            qualityLinks >= config.minQualityStreams -> true
+            config.requireDualQualities -> {
+                val dualMet = has1080Stream.get() && has720Stream.get()
+                (dualMet && subsMet && p720Met && links >= config.minVerifiedLinks) ||
+                (links >= 4 && subsMet && p720Met) ||
+                (links >= 6 && subsMet) ||
+                (links >= 8)
+            }
+            // 1. 1 high-bitrate/quality stream
+            qualityLinks >= config.minQualityStreams && subsMet && p720Met -> true
             // 2. 2 verified streams
-            links >= config.minVerifiedLinks && (!config.requireSubtitles || subs >= config.minSubtitles) -> true
+            links >= config.minVerifiedLinks && subsMet && p720Met -> true
             // 3. 1 stream + subtitles (if satisfyWithOneLinkIfSubsFound enabled)
-            config.satisfyWithOneLinkIfSubsFound && links >= 1 && subs >= config.minSubtitles -> true
+            config.satisfyWithOneLinkIfSubsFound && links >= 1 && subs >= config.minSubtitles && p720Met -> true
             // 4. Hard ceiling
-            links >= 4 -> true
+            links >= 4 && subsMet && p720Met -> true
+            links >= 6 && subsMet -> true
+            links >= 8 -> true
             else -> false
         }
 
         if (isEarlySatisfied) {
-            satisfied.compareAndSet(false, true)
+            if (satisfied.compareAndSet(false, true)) {
+                onSatisfiedCallback?.invoke()
+            }
         }
         return satisfied.get()
     }
 
     fun isSatisfied(): Boolean = satisfied.get() || checkSatisfaction()
-    fun markSatisfied() { satisfied.set(true) }
+    fun markSatisfied() {
+        if (satisfied.compareAndSet(false, true)) {
+            onSatisfiedCallback?.invoke()
+        }
+    }
+    fun onCandidateLink(link: ExtractorLink? = null) {
+        candidateLinksFound.incrementAndGet()
+    }
     fun getLinksCount(): Int = linksFound.get()
+    fun getCandidateLinksCount(): Int = candidateLinksFound.get()
     fun getQualityLinksCount(): Int = qualityLinksFound.get()
     fun getSubtitlesCount(): Int = subtitlesFound.get()
     fun reset() {
         linksFound.set(0)
+        candidateLinksFound.set(0)
         qualityLinksFound.set(0)
         subtitlesFound.set(0)
+        has1080Stream.set(false)
+        has720Stream.set(false)
         satisfied.set(false)
+        maxEmittedPriority.set(0f)
     }
 }
+
+internal val FAST_PROVIDER_BOOST = mapOf(
+    "vidlink" to 100f,
+    "Vidlink" to 100f,
+    "HexaSU" to 90f,
+    "hexasu" to 90f,
+    "flixersu" to 90f,
+    "flixer.su" to 90f,
+    "flixer" to 90f,
+    "embedsu" to 90f,
+    "embed.su" to 90f,
+    "autoembed" to 80f,
+    "AutoEmbed" to 80f,
+    "vidfast" to 70f,
+    "VidFast" to 70f,
+    "VidEasy" to 60f,
+    "videasy" to 60f,
+    "vidsrc" to 55f,
+    "VidSrc" to 55f,
+    "VidSrc (Unified)" to 55f,
+    "vidsrcxyz" to 55f,
+    "VidSrcXyz" to 55f,
+    "vidsrccc" to 55f,
+    "VidSrcCc" to 55f,
+    "vidsrcto" to 55f,
+    "VidSrcTo" to 55f,
+    "vidsrcme" to 55f,
+    "VidSrcMe" to 55f,
+    "vidsrcin" to 55f,
+    "VidSrcIn" to 55f,
+    "VidSrc In" to 55f,
+    "vidsrcpm" to 55f,
+    "VidSrcPm" to 55f,
+    "VidSrc Pm" to 55f,
+    "vidsrcnet" to 55f,
+    "VidSrcNet" to 55f,
+    "VidSrc Net" to 55f,
+    "WyZIESUB" to 50f,
+    "SubtitleAPI" to 50f,
+    "moviebox" to 50f,
+    "MovieBox" to 50f,
+    "MovieBox (Multi)" to 50f,
+    "rivestream" to 40f,
+    "RiveStream" to 40f,
+    "vidrock" to 30f,
+    "Vidrock" to 30f,
+    "moviesapi" to 20f,
+    "MoviesApi" to 20f,
+    "MoviesApi Club" to 20f,
+    "vidzeeapi" to 15f,
+    "vidzee" to 15f,
+    "Vidzee" to 15f,
+    "Vidzee API" to 15f,
+    "2Embed" to 10f,
+    "2embed" to 10f
+)
 
 /**
  * State-Of-The-Art Speculative Scraper Pipelining Engine
@@ -179,19 +298,42 @@ object SpeculativePipeliner {
     val STATIC_COLD_START_TIERS: Map<String, LatencyTier> = mapOf(
         // Tier 0: Direct cache / instant player
         "streamplay_cache" to LatencyTier.TIER_0,
-        "febbox_player" to LatencyTier.TIER_0,
         "debrid_cache" to LatencyTier.TIER_0,
 
         // Tier 1: Fast reliable JSON APIs & resolvers
-        "vidsrcxyz" to LatencyTier.TIER_1,
-        "rivestream" to LatencyTier.TIER_1,
         "vidlink" to LatencyTier.TIER_1,
-        "vidfast" to LatencyTier.TIER_1,
-        "moviesapi" to LatencyTier.TIER_1,
+        "Vidlink" to LatencyTier.TIER_1,
         "HexaSU" to LatencyTier.TIER_1,
-        "superstream" to LatencyTier.TIER_1,
-        "SuperStream" to LatencyTier.TIER_1,
+        "hexasu" to LatencyTier.TIER_1,
+        "flixersu" to LatencyTier.TIER_1,
+        "flixer.su" to LatencyTier.TIER_1,
+        "flixer" to LatencyTier.TIER_1,
+        "embedsu" to LatencyTier.TIER_1,
+        "embed.su" to LatencyTier.TIER_1,
+        "autoembed" to LatencyTier.TIER_1,
+        "AutoEmbed" to LatencyTier.TIER_1,
+        "vidfast" to LatencyTier.TIER_1,
+        "VidFast" to LatencyTier.TIER_1,
+        "VidEasy" to LatencyTier.TIER_1,
+        "videasy" to LatencyTier.TIER_1,
+        "vidsrc" to LatencyTier.TIER_1,
+        "VidSrc" to LatencyTier.TIER_1,
+        "VidSrc (Unified)" to LatencyTier.TIER_1,
+        "vidsrcxyz" to LatencyTier.TIER_1,
+        "VidSrcXyz" to LatencyTier.TIER_1,
+        "vidsrccc" to LatencyTier.TIER_1,
+        "VidSrcCc" to LatencyTier.TIER_1,
+        "vidsrcto" to LatencyTier.TIER_1,
+        "VidSrcTo" to LatencyTier.TIER_1,
+        "vidsrcme" to LatencyTier.TIER_1,
+        "VidSrcMe" to LatencyTier.TIER_1,
+        "rivestream" to LatencyTier.TIER_1,
+        "moviesapi" to LatencyTier.TIER_1,
+        "MoviesApi Club" to LatencyTier.TIER_1,
         "moviebox" to LatencyTier.TIER_1,
+        "MovieBox (Multi)" to LatencyTier.TIER_1,
+        "vidrock" to LatencyTier.TIER_1,
+        "Vidrock" to LatencyTier.TIER_1,
         "vidzeeapi" to LatencyTier.TIER_1,
         "2Embed" to LatencyTier.TIER_1,
         "Hianime" to LatencyTier.TIER_1,
@@ -220,7 +362,6 @@ object SpeculativePipeliner {
         "M4uhd" to LatencyTier.TIER_2,
         "CineVood" to LatencyTier.TIER_2,
         "DooFlix" to LatencyTier.TIER_2,
-        "vaplayer" to LatencyTier.TIER_2,
         "Dudefilms" to LatencyTier.TIER_2,
         "Zinkmovies" to LatencyTier.TIER_2,
         "Peachify" to LatencyTier.TIER_2,
@@ -233,7 +374,6 @@ object SpeculativePipeliner {
         "AllMovieland" to LatencyTier.TIER_2,
         "AllMovielandMediaProvider" to LatencyTier.TIER_2,
         "allmovieland" to LatencyTier.TIER_2,
-        "SuperStreamFebbox" to LatencyTier.TIER_2,
 
         // Tier 3: Slow / edge fallback
         "tokyoinsider" to LatencyTier.TIER_3,
@@ -281,7 +421,9 @@ object SpeculativePipeliner {
         // Group tasks into tiers, and sort tasks within each tier by priority score descending
         val classifiedTasks = tasks.map { task ->
             val tier = classifyProvider(task.providerId, task.initialTier)
-            val score = ProviderTelemetryManager.getPriorityScore(task.providerId) + task.priorityBoost
+            val baseBoost = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
+            val telemetry = ProviderTelemetryManager.getPriorityScore(task.providerId)
+            val score = if (telemetry <= -500f) telemetry else (baseBoost * 100f + telemetry)
             Triple(task, tier, score)
         }
 
@@ -300,6 +442,53 @@ object SpeculativePipeliner {
         val tier2Jobs = CopyOnWriteArrayList<Job>()
         val tier3Jobs = CopyOnWriteArrayList<Job>()
 
+        data class TrackedTaskInfo(
+            val job: Job,
+            val task: PipelinedTask,
+            val priorityScore: Float
+        )
+        val trackedTasks = CopyOnWriteArrayList<TrackedTaskInfo>()
+        val maxEmittedPriority = java.util.concurrent.atomic.AtomicReference<Float>(0f)
+
+        fun getMaxPriorityThreshold(): Float {
+            return maxOf(maxEmittedPriority.get(), controller.getMaxEmittedPriority())
+        }
+
+        fun hasHigherPriorityInFlight(): Boolean {
+            val threshold = getMaxPriorityThreshold()
+            return trackedTasks.any { it.job.isActive && it.priorityScore > threshold }
+        }
+
+        fun isTopTierTask(info: TrackedTaskInfo): Boolean {
+            return StreamLinkOptimizer.isTopTierProvider(info.task.providerId) ||
+                info.task.priorityBoost >= 55f ||
+                (FAST_PROVIDER_BOOST[info.task.providerId] ?: 0f) >= 55f
+        }
+
+        fun isTopTierTask(task: PipelinedTask): Boolean {
+            val boost = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
+            return StreamLinkOptimizer.isTopTierProvider(task.providerId) ||
+                boost >= 55f ||
+                task.priorityBoost >= 55f
+        }
+
+        fun cancelLowerOrEqualPriorityJobs() {
+            val threshold = getMaxPriorityThreshold()
+            for (info in trackedTasks) {
+                if (info.job.isActive && info.task.isVideo && info.priorityScore <= threshold) {
+                    info.job.cancel(CancellationException("Early satisfaction achieved by higher tier source"))
+                }
+            }
+        }
+
+        fun cancelActiveVideoJobs() {
+            for (info in trackedTasks) {
+                if (info.job.isActive && info.task.isVideo && !isTopTierTask(info)) {
+                    info.job.cancel(CancellationException("Early video satisfaction achieved"))
+                }
+            }
+        }
+
         fun cancelAllActiveJobs() {
             for (job in activeJobs) {
                 if (job.isActive) {
@@ -308,12 +497,32 @@ object SpeculativePipeliner {
             }
         }
 
+        fun handleEarlySatisfaction() {
+            if (controller.isSatisfied()) {
+                if (!hasHigherPriorityInFlight()) {
+                    cancelActiveVideoJobs()
+                } else {
+                    cancelLowerOrEqualPriorityJobs()
+                }
+            }
+        }
+
+        val previousCallback = controller.onSatisfiedCallback
+        controller.onSatisfiedCallback = {
+            previousCallback?.invoke()
+            handleEarlySatisfaction()
+        }
+
         fun launchTaskGroup(taskList: List<PipelinedTask>, targetList: CopyOnWriteArrayList<Job>): List<Job> {
-            if (controller.isSatisfied()) return emptyList()
+            val hasEligibleInGroup = taskList.any { !it.isVideo || isTopTierTask(it) }
+            if (controller.isSatisfied() && !hasHigherPriorityInFlight() && !hasEligibleInGroup) return emptyList()
+            val allBroken = taskList.isNotEmpty() && taskList.all { ProviderTelemetryManager.isCircuitBroken(it.providerId) }
             return taskList.map { task ->
+                val taskPriority = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
+                val isTopTier = isTopTierTask(task)
+                val isVideo = task.isVideo
                 launch(Dispatchers.IO) {
-                    if (controller.isSatisfied()) return@launch
-                    if (!ProviderTelemetryManager.canExecute(task.providerId)) {
+                    if (!allBroken && !ProviderTelemetryManager.canExecute(task.providerId)) {
                         Log.d(TAG, "Circuit breaker: skipping open provider ${task.providerId}")
                         return@launch
                     }
@@ -323,20 +532,20 @@ object SpeculativePipeliner {
                     val start = System.currentTimeMillis()
                     var success = false
                     val beforeLinks = controller.getLinksCount()
+                    val beforeCandidateLinks = controller.getCandidateLinksCount()
+                    val beforeQuality = controller.getQualityLinksCount()
                     val beforeSubs = controller.getSubtitlesCount()
 
                     try {
                         semaphore.withPermit {
-                            if (controller.isSatisfied()) {
-                                throw CancellationException("Early satisfaction achieved")
-                            }
                             withTimeoutOrNull(timeout.milliseconds) {
                                 task.execute()
                             }
-                            success = if (task.isVideo) {
-                                controller.getLinksCount() > beforeLinks
-                            } else {
-                                controller.getSubtitlesCount() > beforeSubs
+                            val emittedLinks = controller.getLinksCount() > beforeLinks || controller.getCandidateLinksCount() > beforeCandidateLinks
+                            val emittedQuality = controller.getQualityLinksCount() > beforeQuality
+                            success = if (task.isVideo) emittedLinks else controller.getSubtitlesCount() > beforeSubs
+                            if (emittedQuality || emittedLinks) {
+                                maxEmittedPriority.accumulateAndGet(taskPriority) { prev, cur -> maxOf(prev, cur) }
                             }
                         }
                     } catch (e: CancellationException) {
@@ -352,13 +561,12 @@ object SpeculativePipeliner {
                         } else {
                             ProviderTelemetryManager.releaseCanaryPermit(task.providerId)
                         }
-                        if (controller.isSatisfied()) {
-                            cancelAllActiveJobs()
-                        }
+                        handleEarlySatisfaction()
                     }
                 }.also {
                     activeJobs.add(it)
                     targetList.add(it)
+                    trackedTasks.add(TrackedTaskInfo(it, task, taskPriority))
                 }
             }
         }
@@ -383,12 +591,14 @@ object SpeculativePipeliner {
 
         val pipelineStartTime = System.currentTimeMillis()
         val firstLinkEmittedAt = java.util.concurrent.atomic.AtomicLong(0L)
+        var satisfactionTime = 0L
         val satisfactionWatcher = launch {
-            while (isActive && !controller.isSatisfied()) {
+            while (isActive) {
                 val now = System.currentTimeMillis()
                 if (config.maxPipelineTimeoutMs > 0L && (now - pipelineStartTime) >= config.maxPipelineTimeoutMs) {
                     Log.d(TAG, "⏰ Max pipeline timeout (${config.maxPipelineTimeoutMs}ms) reached. Satisfying pipeline.")
                     controller.markSatisfied()
+                    cancelAllActiveJobs()
                     break
                 }
                 if (config.softGracePeriodAfterFirstLinkMs > 0L && controller.getLinksCount() > 0) {
@@ -397,13 +607,42 @@ object SpeculativePipeliner {
                     if (graceElapsed >= config.softGracePeriodAfterFirstLinkMs) {
                         Log.d(TAG, "⚡ Soft grace period (${config.softGracePeriodAfterFirstLinkMs}ms) expired after first link. Marking satisfied.")
                         controller.markSatisfied()
+                    }
+                }
+                if (controller.isSatisfied()) {
+                    if (satisfactionTime == 0L) {
+                        satisfactionTime = now
+                        if (!hasHigherPriorityInFlight()) {
+                            cancelActiveVideoJobs()
+                        } else {
+                            cancelLowerOrEqualPriorityJobs()
+                        }
+                    }
+                    val hasActiveTopTierVideo = trackedTasks.any { it.job.isActive && it.task.isVideo && isTopTierTask(it) }
+                    if (!hasActiveTopTierVideo) {
                         break
+                    } else {
+                        val satTime = if (satisfactionTime > 0L) satisfactionTime else now
+                        val graceElapsed = now - satTime
+                        val graceTimeout = if (hasHigherPriorityInFlight()) {
+                            maxOf(config.postSatisfactionGraceMs, 9_500L)
+                        } else {
+                            config.postSatisfactionGraceMs
+                        }
+                        if (graceElapsed >= graceTimeout) {
+                            Log.d(TAG, "⏰ Post-satisfaction grace (${graceTimeout}ms) expired. Cancelling slow top-tier video jobs.")
+                            for (info in trackedTasks) {
+                                if (info.job.isActive && info.task.isVideo) {
+                                    info.job.cancel(CancellationException("Post-satisfaction grace expired for slow top-tier video jobs"))
+                                }
+                            }
+                            break
+                        } else if (hasHigherPriorityInFlight()) {
+                            cancelLowerOrEqualPriorityJobs()
+                        }
                     }
                 }
                 delay(config.checkIntervalMs.milliseconds)
-            }
-            if (controller.isSatisfied()) {
-                cancelAllActiveJobs()
             }
         }
 
@@ -413,25 +652,43 @@ object SpeculativePipeliner {
 
             // Stage 1: Launch Tier 1 after tier1DelayMs (150ms)
             // SOTA: If Tier 0 had zero tasks and adaptiveTierEscalation is enabled, launch Tier 1 at T = 0ms
-            if (!controller.isSatisfied() && tier1Tasks.isNotEmpty()) {
-                val delayTier1 = if (tier0Tasks.isEmpty() && config.adaptiveTierEscalation) 0L else config.tier1DelayMs
-                delayUnlessSatisfied(delayTier1, tier0Jobs)
-                if (!controller.isSatisfied()) {
+            val delayTier1 = if (tier0Tasks.isEmpty() && config.adaptiveTierEscalation) 0L else config.tier1DelayMs
+            if (delayTier1 <= 0L) {
+                if (tier1Tasks.isNotEmpty()) {
                     launchTaskGroup(tier1Tasks, tier1Jobs)
+                }
+            } else if (tier1Tasks.isNotEmpty()) {
+                delayUnlessSatisfied(delayTier1, tier0Jobs)
+                val eligibleTier1 = if (controller.isSatisfied() && !hasHigherPriorityInFlight()) {
+                    tier1Tasks.filter { !it.isVideo || isTopTierTask(it) }
+                } else {
+                    tier1Tasks
+                }
+                if (eligibleTier1.isNotEmpty()) {
+                    launchTaskGroup(eligibleTier1, tier1Jobs)
                 }
             }
 
             // Stage 2: Launch Tier 2 after tier2DelayMs (1500ms)
-            if (!controller.isSatisfied() && tier2Tasks.isNotEmpty()) {
+            if (tier2Tasks.isNotEmpty()) {
                 val delayTier2 = if (tier0Tasks.isEmpty() && tier1Tasks.isEmpty() && config.adaptiveTierEscalation) {
                     0L
                 } else {
                     val elapsed = System.currentTimeMillis() - pipelineStartTime
                     (config.tier2DelayMs - elapsed).coerceAtLeast(0L)
                 }
-                delayUnlessSatisfied(delayTier2, tier0Jobs + tier1Jobs)
-                if (!controller.isSatisfied()) {
+                if (delayTier2 <= 0L) {
                     launchTaskGroup(tier2Tasks, tier2Jobs)
+                } else {
+                    delayUnlessSatisfied(delayTier2, tier0Jobs + tier1Jobs)
+                    val eligibleTier2 = if (controller.isSatisfied() && !hasHigherPriorityInFlight()) {
+                        tier2Tasks.filter { !it.isVideo || isTopTierTask(it) }
+                    } else {
+                        tier2Tasks
+                    }
+                    if (eligibleTier2.isNotEmpty()) {
+                        launchTaskGroup(eligibleTier2, tier2Jobs)
+                    }
                 }
             }
 
@@ -443,7 +700,9 @@ object SpeculativePipeliner {
                     val elapsed2 = System.currentTimeMillis() - pipelineStartTime
                     (config.tier3DelayMs - elapsed2).coerceAtLeast(0L)
                 }
-                delayUnlessSatisfied(delayTier3, tier0Jobs + tier1Jobs + tier2Jobs)
+                if (delayTier3 > 0L) {
+                    delayUnlessSatisfied(delayTier3, tier0Jobs + tier1Jobs + tier2Jobs)
+                }
                 if (!controller.isSatisfied() && controller.getLinksCount() == 0) {
                     launchTaskGroup(tier3Tasks, tier3Jobs)
                 }
@@ -451,6 +710,7 @@ object SpeculativePipeliner {
 
             activeJobs.toList().joinAll()
         } finally {
+            controller.onSatisfiedCallback = previousCallback
             satisfactionWatcher.cancel()
             cancelAllActiveJobs()
         }

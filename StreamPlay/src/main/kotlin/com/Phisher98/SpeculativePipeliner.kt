@@ -233,6 +233,62 @@ class EarlySatisfactionController(
     }
 }
 
+internal val FAST_PROVIDER_BOOST = mapOf(
+    "vidlink" to 100f,
+    "Vidlink" to 100f,
+    "HexaSU" to 90f,
+    "hexasu" to 90f,
+    "flixersu" to 90f,
+    "flixer.su" to 90f,
+    "flixer" to 90f,
+    "embedsu" to 90f,
+    "embed.su" to 90f,
+    "autoembed" to 80f,
+    "AutoEmbed" to 80f,
+    "vidfast" to 70f,
+    "VidFast" to 70f,
+    "VidEasy" to 60f,
+    "videasy" to 60f,
+    "vidsrc" to 55f,
+    "VidSrc" to 55f,
+    "VidSrc (Unified)" to 55f,
+    "vidsrcxyz" to 55f,
+    "VidSrcXyz" to 55f,
+    "vidsrccc" to 55f,
+    "VidSrcCc" to 55f,
+    "vidsrcto" to 55f,
+    "VidSrcTo" to 55f,
+    "vidsrcme" to 55f,
+    "VidSrcMe" to 55f,
+    "vidsrcin" to 55f,
+    "VidSrcIn" to 55f,
+    "VidSrc In" to 55f,
+    "vidsrcpm" to 55f,
+    "VidSrcPm" to 55f,
+    "VidSrc Pm" to 55f,
+    "vidsrcnet" to 55f,
+    "VidSrcNet" to 55f,
+    "VidSrc Net" to 55f,
+    "WyZIESUB" to 50f,
+    "SubtitleAPI" to 50f,
+    "moviebox" to 50f,
+    "MovieBox" to 50f,
+    "MovieBox (Multi)" to 50f,
+    "rivestream" to 40f,
+    "RiveStream" to 40f,
+    "vidrock" to 30f,
+    "Vidrock" to 30f,
+    "moviesapi" to 20f,
+    "MoviesApi" to 20f,
+    "MoviesApi Club" to 20f,
+    "vidzeeapi" to 15f,
+    "vidzee" to 15f,
+    "Vidzee" to 15f,
+    "Vidzee API" to 15f,
+    "2Embed" to 10f,
+    "2embed" to 10f
+)
+
 /**
  * State-Of-The-Art Speculative Scraper Pipelining Engine
  */
@@ -404,18 +460,16 @@ object SpeculativePipeliner {
         }
 
         fun isTopTierTask(info: TrackedTaskInfo): Boolean {
-            return info.priorityScore >= 55f ||
-                StreamLinkOptimizer.isTopTierProvider(info.task.providerId) ||
+            return StreamLinkOptimizer.isTopTierProvider(info.task.providerId) ||
                 info.task.priorityBoost >= 55f ||
                 (FAST_PROVIDER_BOOST[info.task.providerId] ?: 0f) >= 55f
         }
 
         fun isTopTierTask(task: PipelinedTask): Boolean {
             val boost = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
-            return boost >= 55f ||
-                task.priorityBoost >= 55f ||
-                StreamLinkOptimizer.isTopTierProvider(task.providerId) ||
-                ProviderTelemetryManager.getPriorityScore(task.providerId) >= 55f
+            return StreamLinkOptimizer.isTopTierProvider(task.providerId) ||
+                boost >= 55f ||
+                task.priorityBoost >= 55f
         }
 
         fun cancelLowerOrEqualPriorityJobs() {
@@ -466,9 +520,8 @@ object SpeculativePipeliner {
             return taskList.map { task ->
                 val taskPriority = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
                 val isTopTier = isTopTierTask(task)
-                val isSubtitle = !task.isVideo
+                val isVideo = task.isVideo
                 launch(Dispatchers.IO) {
-                    if (controller.isSatisfied() && (!hasHigherPriorityInFlight() || taskPriority <= getMaxPriorityThreshold()) && !isTopTier && !isSubtitle) return@launch
                     if (!allBroken && !ProviderTelemetryManager.canExecute(task.providerId)) {
                         Log.d(TAG, "Circuit breaker: skipping open provider ${task.providerId}")
                         return@launch
@@ -485,9 +538,6 @@ object SpeculativePipeliner {
 
                     try {
                         semaphore.withPermit {
-                            if (controller.isSatisfied() && (!hasHigherPriorityInFlight() || taskPriority <= getMaxPriorityThreshold()) && !isTopTier && !isSubtitle) {
-                                throw CancellationException("Early satisfaction achieved")
-                            }
                             withTimeoutOrNull(timeout.milliseconds) {
                                 task.execute()
                             }
@@ -541,7 +591,7 @@ object SpeculativePipeliner {
 
         val pipelineStartTime = System.currentTimeMillis()
         val firstLinkEmittedAt = java.util.concurrent.atomic.AtomicLong(0L)
-        var satisfactionTime: Long? = null
+        var satisfactionTime = 0L
         val satisfactionWatcher = launch {
             while (isActive) {
                 val now = System.currentTimeMillis()
@@ -560,17 +610,27 @@ object SpeculativePipeliner {
                     }
                 }
                 if (controller.isSatisfied()) {
-                    if (satisfactionTime == null) {
+                    if (satisfactionTime == 0L) {
                         satisfactionTime = now
-                        cancelActiveVideoJobs()
+                        if (!hasHigherPriorityInFlight()) {
+                            cancelActiveVideoJobs()
+                        } else {
+                            cancelLowerOrEqualPriorityJobs()
+                        }
                     }
                     val hasActiveTopTierVideo = trackedTasks.any { it.job.isActive && it.task.isVideo && isTopTierTask(it) }
                     if (!hasActiveTopTierVideo) {
                         break
                     } else {
-                        val graceElapsed = now - (satisfactionTime ?: now)
-                        if (graceElapsed >= config.postSatisfactionGraceMs) {
-                            Log.d(TAG, "⏰ Post-satisfaction grace (${config.postSatisfactionGraceMs}ms) expired. Cancelling slow top-tier video jobs.")
+                        val satTime = if (satisfactionTime > 0L) satisfactionTime else now
+                        val graceElapsed = now - satTime
+                        val graceTimeout = if (hasHigherPriorityInFlight()) {
+                            maxOf(config.postSatisfactionGraceMs, 9_500L)
+                        } else {
+                            config.postSatisfactionGraceMs
+                        }
+                        if (graceElapsed >= graceTimeout) {
+                            Log.d(TAG, "⏰ Post-satisfaction grace (${graceTimeout}ms) expired. Cancelling slow top-tier video jobs.")
                             for (info in trackedTasks) {
                                 if (info.job.isActive && info.task.isVideo) {
                                     info.job.cancel(CancellationException("Post-satisfaction grace expired for slow top-tier video jobs"))
