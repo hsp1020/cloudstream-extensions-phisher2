@@ -515,6 +515,7 @@ class DualQualityAndSotaHierarchyTest {
         val tasks = listOf(
             // Tier 0 Fast Video: Emits 1080p and 720p immediately, achieving early video satisfaction
             PipelinedTask("FastVideo", LatencyTier.TIER_0, isVideo = true) {
+                delay(20)
                 controller.onLinkEmitted(createLink("FastVideo", "FastVideo [1080p]", "https://cdn.com/1080.m3u8", Qualities.P1080.value))
                 controller.onLinkEmitted(createLink("FastVideo", "FastVideo [720p]", "https://cdn.com/720.m3u8", Qualities.P720.value))
             },
@@ -576,7 +577,7 @@ class DualQualityAndSotaHierarchyTest {
         for ((sourceName, expectedRank) in topSources) {
             val emittedList = mutableListOf<ExtractorLink>()
             val deduplicator = StreamLinkOptimizer.StreamDeduplicator { emittedList.add(it) }
-            val streamUrl = "https://cdn.example.com/direct/stream/movie123"
+            val streamUrl = "https://cdn.example.com/direct/stream/movie123.mp4"
 
             val link720 = createLink(
                 source = sourceName,
@@ -599,12 +600,13 @@ class DualQualityAndSotaHierarchyTest {
             val res1080 = deduplicator.emitDetailed(link1080)
 
             assertEquals("$sourceName 720p must be NEW", StreamLinkOptimizer.DeduplicationResult.NEW, res720)
-            assertEquals("$sourceName 1080p must also be NEW without discarding 720p", StreamLinkOptimizer.DeduplicationResult.NEW, res1080)
+            assertEquals("$sourceName 1080p must upgrade 720p rather than coexisting as duplicate URL", StreamLinkOptimizer.DeduplicationResult.UPGRADED, res1080)
 
-            assertEquals("$sourceName must preserve BOTH 720p and 1080p in deduplicator", 2, deduplicator.getEmittedCount())
+            assertEquals("$sourceName must deduplicate direct video to exactly 1 stream", 1, deduplicator.getEmittedCount())
             val emittedLinks = deduplicator.getEmittedLinks()
-            assertTrue("$sourceName must contain 720p stream", emittedLinks.any { it.quality == Qualities.P720.value })
-            assertTrue("$sourceName must contain 1080p stream", emittedLinks.any { it.quality == Qualities.P1080.value })
+            assertEquals(1, emittedLinks.size)
+            assertEquals(Qualities.P1080.value, emittedLinks.first().quality)
+            assertEquals(streamUrl, emittedLinks.first().url)
         }
     }
 
@@ -771,13 +773,11 @@ class DualQualityAndSotaHierarchyTest {
             callback = { emitted.add(it) }
         )
 
-        assertEquals("Must emit exactly 2 links for direct video", 2, emitted.size)
-        assertEquals("Priority #1 must be 720p", Qualities.P720.value, emitted[0].quality)
-        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
-        assertTrue("Priority #1 must have 720p tag in name", emitted[0].name.contains("720p"))
-        assertTrue("Priority #2 must have 1080p tag in name", emitted[1].name.contains("1080p"))
+        assertEquals("Must emit exactly 1 link for direct video without synthetic companion", 1, emitted.size)
+        assertEquals("Direct video URL must match", "https://vidlink.pro/stream/movie.mp4", emitted[0].url)
+        assertEquals("Direct video source must match", "VidLink", emitted[0].source)
+        assertEquals("Direct video type must match", ExtractorLinkType.VIDEO, emitted[0].type)
         assertTrue("Links must have sota_dual_quality tag in extractorData", emitted[0].extractorData?.contains("sota_dual_quality") == true)
-        assertTrue("Links must have sota_dual_quality tag in extractorData", emitted[1].extractorData?.contains("sota_dual_quality") == true)
     }
 
     @Test
@@ -794,9 +794,9 @@ class DualQualityAndSotaHierarchyTest {
             callback = { emitted.add(it) }
         )
 
-        assertEquals("Must emit 2 links (synthesized 720p + original 1080p)", 2, emitted.size)
-        assertEquals("Priority #1 must be 720p", Qualities.P720.value, emitted[0].quality)
-        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
+        assertEquals("Must emit exactly 1 link (only genuine 1080p variant without fake 720p companion)", 1, emitted.size)
+        assertEquals("Only genuine 1080p variant must be emitted", Qualities.P1080.value, emitted[0].quality)
+        assertEquals("URL must match original variant", link1080.url, emitted[0].url)
     }
 
     @Test
@@ -813,9 +813,9 @@ class DualQualityAndSotaHierarchyTest {
             callback = { emitted.add(it) }
         )
 
-        assertEquals("Must emit 2 links (original 720p + synthesized 1080p)", 2, emitted.size)
-        assertEquals("Priority #1 must be 720p", Qualities.P720.value, emitted[0].quality)
-        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
+        assertEquals("Must emit exactly 1 link (only genuine 720p variant without fake 1080p companion)", 1, emitted.size)
+        assertEquals("Only genuine 720p variant must be emitted", Qualities.P720.value, emitted[0].quality)
+        assertEquals("URL must match original variant", link720.url, emitted[0].url)
     }
 
     @Test
@@ -841,11 +841,9 @@ class DualQualityAndSotaHierarchyTest {
                 callback = { emitted.add(it) }
             )
 
-            assertEquals("$srcName must emit 2 links", 2, emitted.size)
-            assertEquals("$srcName #1 must be 720p", Qualities.P720.value, emitted[0].quality)
-            assertEquals("$srcName #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
+            assertEquals("$srcName must emit exactly 1 authentic link", 1, emitted.size)
             assertEquals("$srcName must match expected rank $expectedRank", expectedRank, StreamLinkOptimizer.getSourcePriorityRank(emitted[0]))
-            assertEquals("$srcName must match expected rank $expectedRank", expectedRank, StreamLinkOptimizer.getSourcePriorityRank(emitted[1]))
+            assertEquals("$srcName URL must match", "https://cdn.example.com/$srcName/stream.mp4", emitted[0].url)
         }
     }
 
@@ -865,15 +863,10 @@ class DualQualityAndSotaHierarchyTest {
             callback = { emitted.add(it) }
         )
 
-        assertEquals("Must emit 4 links (synthesized 720p, synthesized 1080p, original 480p, original 360p)", 4, emitted.size)
-        assertEquals("Priority #1 must be 720p", Qualities.P720.value, emitted[0].quality)
-        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, emitted[1].quality)
-        assertEquals("Priority #3 must be 480p", Qualities.P480.value, emitted[2].quality)
-        assertEquals("Priority #4 must be 360p", Qualities.P360.value, emitted[3].quality)
-
-        // Verify synthesized 720p and 1080p derived from the highest quality stream (480p), not 360p!
-        assertEquals("Synthesized 720p must inherit URL from highest available stream (480p)", link480.url, emitted[0].url)
-        assertEquals("Synthesized 1080p must inherit URL from highest available stream (480p)", link480.url, emitted[1].url)
+        assertEquals("Must emit exactly 2 genuine variants (480p and 360p)", 2, emitted.size)
+        assertEquals("Priority #1 must be 480p", Qualities.P480.value, emitted[0].quality)
+        assertEquals("Priority #2 must be 360p", Qualities.P360.value, emitted[1].quality)
+        assertTrue("Must not synthesize 720p or 1080p companions", emitted.none { it.quality == Qualities.P720.value || it.quality == Qualities.P1080.value })
     }
 
     @Test
@@ -892,14 +885,14 @@ class DualQualityAndSotaHierarchyTest {
             callback = { emitted.add(it) }
         )
 
-        assertEquals("Must emit 2 links", 2, emitted.size)
+        assertEquals("Must emit exactly 1 resolved link without synthetic companion", 1, emitted.size)
         assertEquals("Priority #1 must have resolved quality 720", Qualities.P720.value, emitted[0].quality)
-        assertEquals("Priority #2 must have synthesized quality 1080", Qualities.P1080.value, emitted[1].quality)
     }
 
     @Test
     fun testCreateQualityCompanionFormattingAndTags() {
         val original = createLink("VidLink", "VidLink Server 1 [1080p]", "https://vidlink.pro/stream.m3u8", Qualities.P1080.value)
+        @Suppress("DEPRECATION")
         val companion720 = StreamLinkOptimizer.createQualityCompanion(original, Qualities.P720.value)
 
         assertEquals("VidLink Server 1 [720p]", companion720.name)
@@ -1012,11 +1005,9 @@ class DualQualityAndSotaHierarchyTest {
         val handled = StreamLinkOptimizer.processTopTierDualQualityStream(rawVidLink1080, guardedKeys) { emitted.add(it) }
 
         assertTrue("Must be handled as top tier", handled)
-        assertEquals("Must emit 2 links (720p companion first, then 1080p tagged)", 2, emitted.size)
-        assertEquals(Qualities.P720.value, emitted[0].quality)
-        assertEquals(Qualities.P1080.value, emitted[1].quality)
-        assertTrue("Emitted 720p must have sota_dual_quality tag", emitted[0].extractorData?.contains("sota_dual_quality") == true)
-        assertTrue("Emitted 1080p must have sota_dual_quality tag", emitted[1].extractorData?.contains("sota_dual_quality") == true)
+        assertEquals("Must emit exactly 1 link without synthetic companion expansion", 1, emitted.size)
+        assertEquals(Qualities.P1080.value, emitted[0].quality)
+        assertEquals("https://vidlink.pro/video.mp4", emitted[0].url)
 
         // Repeating call with same stream key must NOT duplicate/re-expand
         val emitted2 = mutableListOf<ExtractorLink>()
@@ -1569,6 +1560,131 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals("Priority #2 must be VidFast 1080p", vidfast1080, emittedLinks[1])
 
         dispatcher.flush()
+    }
+
+    // =========================================================================
+    // SOTA Authentic Stream Quality Verification: R1, R2, R3
+    // =========================================================================
+
+    @Test
+    fun testR1NoUrlDuplicationForDirectVideoFiles() = runBlocking {
+        // 1. emitTopTierDualQualityStreamLinks with direct MP4 URL must emit exactly ONE link
+        val emitted = mutableListOf<ExtractorLink>()
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = "VidLink",
+            baseName = "VidLink Direct",
+            url = "https://cdn.example.com/movie.mp4",
+            referer = "https://vidlink.pro/",
+            streamType = ExtractorLinkType.VIDEO,
+            generatedLinks = null,
+            callback = { emitted.add(it) }
+        )
+        assertEquals("Direct MP4 file must produce exactly 1 link", 1, emitted.size)
+        assertEquals("URL must match original exactly", "https://cdn.example.com/movie.mp4", emitted[0].url)
+        assertFalse("Link name must not contain duplicate badges", emitted[0].name.contains("[720p] [1080p]"))
+
+        // 2. Direct video files sharing the exact same canonical URL must NOT bypass deduplication with fake quality suffixes
+        val deduplicator = StreamLinkOptimizer.StreamDeduplicator { }
+        val streamUrl = "https://cdn.example.com/direct/video.mp4"
+        val link720 = createLink(
+            source = "VidLink",
+            name = "VidLink [720p]",
+            url = streamUrl,
+            quality = Qualities.P720.value,
+            type = ExtractorLinkType.VIDEO
+        )
+        val link1080 = createLink(
+            source = "VidLink",
+            name = "VidLink [1080p]",
+            url = streamUrl,
+            quality = Qualities.P1080.value,
+            type = ExtractorLinkType.VIDEO
+        )
+
+        val key720 = StreamLinkOptimizer.canonicalStreamKey(link720)
+        val key1080 = StreamLinkOptimizer.canonicalStreamKey(link1080)
+        assertEquals("Direct video canonical keys must be identical without quality suffix", key720, key1080)
+
+        val res1 = deduplicator.emitDetailed(link720)
+        val res2 = deduplicator.emitDetailed(link1080)
+        assertEquals("First stream is accepted as NEW", StreamLinkOptimizer.DeduplicationResult.NEW, res1)
+        assertEquals("Higher-quality duplicate of identical URL upgrades existing entry", StreamLinkOptimizer.DeduplicationResult.UPGRADED, res2)
+        assertEquals("Deduplicator retains exactly 1 stream entry for direct video", 1, deduplicator.getEmittedCount())
+    }
+
+    @Test
+    fun testR2AuthenticHlsVariantLabelingAndAdaptiveMasterHandling() = runBlocking {
+        // 1. Master manifest with only genuine 1080p and 480p variants must NEVER synthesize a fake 720p companion
+        val emittedVariants = mutableListOf<ExtractorLink>()
+        val var1080 = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/1080.m3u8", Qualities.P1080.value, ExtractorLinkType.M3U8)
+        val var480 = createLink("HexaSU", "HexaSU [480p]", "https://hexa.su/480.m3u8", Qualities.P480.value, ExtractorLinkType.M3U8)
+
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = "HexaSU",
+            baseName = "HexaSU Master",
+            url = "https://hexa.su/master.m3u8",
+            referer = "https://hexa.su/",
+            streamType = ExtractorLinkType.M3U8,
+            generatedLinks = listOf(var1080, var480),
+            callback = { emittedVariants.add(it) }
+        )
+
+        assertEquals("Must emit exactly the 2 genuine variants parsed from manifest", 2, emittedVariants.size)
+        assertEquals(Qualities.P1080.value, emittedVariants[0].quality)
+        assertEquals(Qualities.P480.value, emittedVariants[1].quality)
+        assertTrue("No synthetic 720p companion may be emitted", emittedVariants.none { it.quality == Qualities.P720.value })
+
+        // 2. Unparsed HLS master playlist URL must be emitted as a single stream tagged [Auto] with Qualities.Unknown.value
+        val emittedMaster = mutableListOf<ExtractorLink>()
+        StreamLinkOptimizer.emitTopTierDualQualityStreamLinks(
+            source = "AutoEmbed",
+            baseName = "AutoEmbed HLS",
+            url = "https://autoembed.cc/master.m3u8",
+            referer = "https://autoembed.cc/",
+            streamType = ExtractorLinkType.M3U8,
+            generatedLinks = null,
+            callback = { emittedMaster.add(it) }
+        )
+
+        assertEquals("Unparsed master playlist must emit exactly 1 link", 1, emittedMaster.size)
+        assertEquals("Quality must be Qualities.Unknown.value", Qualities.Unknown.value, emittedMaster[0].quality)
+        assertTrue("Stream name must contain [Auto] badge", emittedMaster[0].name.contains("[Auto]"))
+        assertFalse("Stream name must NOT contain fabricated resolution badges", emittedMaster[0].name.contains("1080p") || emittedMaster[0].name.contains("720p"))
+
+        // 3. formatLinkName must add [Auto] badge when quality <= 0 or Unknown on unparsed master/M3U8 stream
+        val formatted = StreamLinkOptimizer.formatLinkName(
+            currentName = "VidFast Master",
+            quality = Qualities.Unknown.value,
+            url = "https://vidfast.vc/stream/master.m3u8"
+        )
+        assertTrue("formatLinkName must inject [Auto] badge for unparsed M3U8", formatted.contains("[Auto]"))
+    }
+
+    @Test
+    fun testR3StreamPriorityHierarchyWithAuthenticStreams() {
+        val link720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
+        val link1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
+        val linkAuto = createLink("VidLink", "VidLink [Auto]", "https://vidlink.pro/master.m3u8", Qualities.Unknown.value, type = ExtractorLinkType.M3U8)
+        val link480 = createLink("VidLink", "VidLink [480p]", "https://vidlink.pro/480.m3u8", Qualities.P480.value)
+        val link4K = createLink("VidLink", "VidLink [4K]", "https://vidlink.pro/4k.m3u8", Qualities.P2160.value)
+
+        val score720 = StreamLinkOptimizer.getStreamCompositeScore(link720)
+        val score1080 = StreamLinkOptimizer.getStreamCompositeScore(link1080)
+        val score480 = StreamLinkOptimizer.getStreamCompositeScore(link480)
+        val score4K = StreamLinkOptimizer.getStreamCompositeScore(link4K)
+
+        // SOTA Quality Hierarchy: 720p (instant playback) > 1080p (high fidelity) > 480p (fallback SD) > 4K (heavy bandwidth)
+        assertTrue("720p score ($score720) must be higher than 1080p score ($score1080)", score720 > score1080)
+        assertTrue("1080p score ($score1080) must be higher than 480p score ($score480)", score1080 > score480)
+        assertTrue("480p score ($score480) must be higher than 4K score ($score4K)", score480 > score4K)
+
+        // Sorting by STREAM_PRIORITY_COMPARATOR must order streams correctly
+        val list = listOf(link4K, link480, link1080, link720)
+        val sorted = list.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR)
+        assertEquals("Priority #1 must be 720p", Qualities.P720.value, sorted[0].quality)
+        assertEquals("Priority #2 must be 1080p", Qualities.P1080.value, sorted[1].quality)
+        assertEquals("Priority #3 must be 480p", Qualities.P480.value, sorted[2].quality)
+        assertEquals("Priority #4 must be 4K", Qualities.P2160.value, sorted[3].quality)
     }
 }
 

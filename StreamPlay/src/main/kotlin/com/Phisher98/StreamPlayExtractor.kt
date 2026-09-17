@@ -412,7 +412,8 @@ object StreamPlayExtractor : StreamPlay() {
                     INFER_TYPE
                 ) {
                     this.referer = ""
-                    this.quality = Qualities.P1080.value
+                    val detectedQ = StreamLinkOptimizer.extractQualityFromText(href)
+                    this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                 }
             )
         }
@@ -457,7 +458,8 @@ object StreamPlayExtractor : StreamPlay() {
                 source,
                 type = ExtractorLinkType.M3U8,
             ) {
-                this.quality = Qualities.P1080.value
+                val detectedQ = StreamLinkOptimizer.extractQualityFromText(source)
+                this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
             }
         )
     }
@@ -577,7 +579,8 @@ object StreamPlayExtractor : StreamPlay() {
                                 INFER_TYPE
                             ) {
                                 referer = kissKhAPI
-                                quality = Qualities.P720.value
+                                val detectedQ = StreamLinkOptimizer.extractQualityFromText(safe)
+                                quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                                 headers = mapOf("Origin" to kissKhAPI)
                             }
                         )
@@ -585,13 +588,15 @@ object StreamPlayExtractor : StreamPlay() {
                     else -> {
                         val cleanedLink = safeLink.substringBefore("?").takeIf { it.isNotBlank() }
                             ?: return@forEach
+                        val detectedQ = StreamLinkOptimizer.extractQualityFromText(cleanedLink)
+                        val resolvedQ = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                         loadSourceNameExtractor(
                             "Kisskh",
                             fixUrl(cleanedLink, kissKhAPI),
                             "$kissKhAPI/",
                             subtitleCallback,
                             callback,
-                            Qualities.P720.value
+                            resolvedQ
                         )
                     }
                 }
@@ -810,7 +815,8 @@ object StreamPlayExtractor : StreamPlay() {
                                             server.link,
                                             INFER_TYPE
                                         ) {
-                                            this.quality = Qualities.P1080.value
+                                            val detectedQ = StreamLinkOptimizer.extractQualityFromText(server.link)
+                                            this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                                         }
                                     )
                                 }
@@ -1372,7 +1378,8 @@ object StreamPlayExtractor : StreamPlay() {
                             this.referer = referer
                             quality = getQualityFromName(source.quality)
                                 .takeIf { it != Qualities.Unknown.value }
-                                ?: Qualities.P1080.value                        }
+                                ?: Qualities.Unknown.value
+                        }
                     )
                 }
 
@@ -1703,7 +1710,8 @@ object StreamPlayExtractor : StreamPlay() {
                                     ExtractorLinkType.M3U8
                                 )
                                 {
-                                    this.quality = Qualities.P1080.value
+                                    val detectedQ = StreamLinkOptimizer.extractQualityFromText(m3u8Url)
+                                    this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                                     this.headers = videoheaders
                                 }
                             )
@@ -1744,7 +1752,8 @@ object StreamPlayExtractor : StreamPlay() {
                             ExtractorLinkType.M3U8
                         )
                         {
-                            this.quality = Qualities.P1080.value
+                            val detectedQ = StreamLinkOptimizer.extractQualityFromText(server.name, m3u8)
+                            this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                             this.headers = videoHeaders
                         }
                     )
@@ -1781,7 +1790,8 @@ object StreamPlayExtractor : StreamPlay() {
                                 ExtractorLinkType.M3U8
                             )
                             {
-                                this.quality = Qualities.P1080.value
+                                val detectedQ = StreamLinkOptimizer.extractQualityFromText(videoUrl)
+                                this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                                 this.headers = headers
                             }
                         )
@@ -2378,7 +2388,8 @@ object StreamPlayExtractor : StreamPlay() {
                                 ) {
                                     this.referer = referer
                                     this.headers = headersMap
-                                    this.quality = Qualities.P1080.value
+                                    val detectedQ = StreamLinkOptimizer.extractQualityFromText(displayName, finalUrl)
+                                    this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                                 }
                             )
                         } catch (e: Exception) {
@@ -2901,7 +2912,8 @@ object StreamPlayExtractor : StreamPlay() {
                 INFER_TYPE
             ) {
                 this.referer = "$nepuAPI/"
-                this.quality = Qualities.P1080.value
+                val detectedQ = StreamLinkOptimizer.extractQualityFromText(m3u8)
+                this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
             }
         )
     }
@@ -3285,8 +3297,10 @@ object StreamPlayExtractor : StreamPlay() {
                                 "source"
                             )
                         }"
-                        val quality = Qualities.P1080.value
                         val url = src.optString("url")
+                        val quality = getQualityFromName(src.optString("quality")).takeIf { it != Qualities.Unknown.value }
+                            ?: StreamLinkOptimizer.extractQualityFromText(label, url).takeIf { it != Qualities.Unknown.value }
+                            ?: Qualities.Unknown.value
 
                         try {
                             if (url.contains("proxy?url=")) {
@@ -4956,7 +4970,7 @@ object StreamPlayExtractor : StreamPlay() {
                                     source = "Vidrock-$key",
                                     streamUrl = safeUrl,
                                     referer = "",
-                                    quality = Qualities.P1080.value,
+                                    quality = Qualities.Unknown.value,
                                     headers = vidrockHeaders
                                 ).forEach(callback)
                             }
@@ -5177,7 +5191,7 @@ object StreamPlayExtractor : StreamPlay() {
                     if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http", ignoreCase = true)) {
                         val qual = qualityKey?.let {
                             StreamLinkOptimizer.extractQualityFromText(it).takeIf { q -> q > Qualities.Unknown.value } ?: getQualityFromName(it)
-                        } ?: Qualities.P1080.value
+                        } ?: Qualities.Unknown.value
                         val isDirectVideo = !videoUrl.contains(".m3u8", ignoreCase = true)
                         val qualHeaders = sanitizeVidlinkHeaders(qualityObj.headers)
 
@@ -5188,7 +5202,7 @@ object StreamPlayExtractor : StreamPlay() {
                         }
                         if (cleanVideoUrl.startsWith("http", ignoreCase = true)) {
                             val effectiveRef = qualHeaders["Referer"] ?: ""
-                            val effectiveQuality = qualityKey?.ifBlank { "1080p" } ?: "1080p"
+                            val effectiveQuality = qualityKey?.takeIf { it.isNotBlank() } ?: "Auto"
                             directQualitiesLinks.add(
                                 newExtractorLink(
                                     "Vidlink",
@@ -5322,7 +5336,7 @@ object StreamPlayExtractor : StreamPlay() {
 
                 if (serversList.isEmpty()) return@withTimeoutOrNull
 
-                val quality = Qualities.P1080.value
+                val quality = Qualities.Unknown.value
 
                 val vidfastServerSemaphore = Semaphore(2)
                 coroutineScope {
@@ -5408,7 +5422,15 @@ object StreamPlayExtractor : StreamPlay() {
 
                                     if (!m3u8Links.isNullOrEmpty()) {
                                         val mappedLinks = m3u8Links.map { genLink ->
-                                            val qualitySuffix = if (genLink.quality == Qualities.P720.value) " [720p]" else if (genLink.quality == Qualities.P1080.value) " [1080p]" else " [${genLink.quality}p]"
+                                            val qualitySuffix = when (genLink.quality) {
+                                                Qualities.P2160.value -> " [4K]"
+                                                Qualities.P1440.value -> " [1440p]"
+                                                Qualities.P1080.value -> " [1080p]"
+                                                Qualities.P720.value -> " [720p]"
+                                                Qualities.P480.value -> " [480p]"
+                                                Qualities.P360.value -> " [360p]"
+                                                else -> if (genLink.quality > 0 && genLink.quality != Qualities.Unknown.value) " [${genLink.quality}p]" else " [Auto]"
+                                            }
                                             newExtractorLink(
                                                 "VidFast",
                                                 "VidFast [$name]$qualitySuffix",
@@ -5887,7 +5909,7 @@ object StreamPlayExtractor : StreamPlay() {
                     text.contains("720", ignoreCase = true) -> Qualities.P720.value
                     text.contains("480", ignoreCase = true) -> Qualities.P480.value
                     text.contains("360", ignoreCase = true) -> Qualities.P360.value
-                    else -> Qualities.P1080.value
+                    else -> Qualities.Unknown.value
                 }
             }
 
@@ -6575,7 +6597,8 @@ object StreamPlayExtractor : StreamPlay() {
                 )
                 {
                     this.referer = "https://molop.art/"
-                    this.quality = Qualities.P1080.value
+                    val detectedQ = StreamLinkOptimizer.extractQualityFromText(streamurl)
+                    this.quality = if (detectedQ > 0 && detectedQ != Qualities.Unknown.value) detectedQ else Qualities.Unknown.value
                 }
             )
         }

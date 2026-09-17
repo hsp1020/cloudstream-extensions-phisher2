@@ -157,7 +157,7 @@ class StreamPlayStremioCatelog(
             minSubtitles = 1,
             satisfyWithOneLinkIfSubsFound = false,
             requireSubtitles = true,
-            requireDualQualities = true,
+            requireDualQualities = false,
             require720p = true,
             adaptiveTierEscalation = true,
             softGracePeriodAfterFirstLinkMs = 4500L,
