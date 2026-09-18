@@ -24,8 +24,8 @@ class StreamPlayProviderDefaultsTest {
     fun testDefaultTopTierProvidersContainsExpectedSources() {
         val expected = setOf(
             "vidlink",
-            "HexaSU",
-            "autoembed",
+            "yflix",
+            "cinejoy",
             "vidfast",
             "VidEasy",
             "vidsrc"

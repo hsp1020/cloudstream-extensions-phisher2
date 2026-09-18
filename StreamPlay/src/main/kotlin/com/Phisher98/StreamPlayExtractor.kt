@@ -5247,6 +5247,320 @@ object StreamPlayExtractor : StreamPlay() {
         invokeVidlink(tmdbId, season, episode, subtitleCallback = null, callback = callback)
     }
 
+    suspend fun invokeYFlix(
+        title: String?,
+        tmdbId: Int? = null,
+        imdbId: String? = null,
+        year: Int? = null,
+        season: Int? = null,
+        episode: Int? = null,
+        subtitleCallback: ((SubtitleFile) -> Unit)? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            if (title.isNullOrBlank() && tmdbId == null && imdbId.isNullOrBlank()) return
+            if (season != null && season != 0 && episode == null) return
+
+            withTimeoutOrNull(3000L) {
+                val yflixHeaders = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to "https://yflix.to/",
+                    "Origin" to "https://yflix.to",
+                    "Accept" to "application/json, text/plain, */*"
+                )
+
+                val domainTargets = listOf("https://yflix.to", "https://moviesflix.to", "https://yflix.cc")
+                val cleanTitle = title?.replace(Regex("[^a-zA-Z0-9\\s]"), " ")?.trim()?.replace(Regex("\\s+"), "-")?.lowercase(Locale.ROOT) ?: ""
+
+                val isTv = (season != null && season > 0) || (episode != null && episode > 0)
+                val paths = if (isTv) {
+                    listOf(
+                        "/api/stream/tv?title=$cleanTitle&season=$season&episode=$episode&year=${year ?: ""}",
+                        "/api/v1/watch?title=$cleanTitle&season=$season&episode=$episode",
+                        if (tmdbId != null) "/api/source/tmdb/tv/$tmdbId/$season/$episode" else null,
+                        if (!imdbId.isNullOrBlank()) "/api/source/imdb/tv/$imdbId/$season/$episode" else null
+                    ).filterNotNull()
+                } else {
+                    listOf(
+                        "/api/stream/movie?title=$cleanTitle&year=${year ?: ""}",
+                        "/api/v1/watch?title=$cleanTitle&year=${year ?: ""}",
+                        if (tmdbId != null) "/api/source/tmdb/movie/$tmdbId" else null,
+                        if (!imdbId.isNullOrBlank()) "/api/source/imdb/movie/$imdbId" else null
+                    ).filterNotNull()
+                }
+
+                for (domain in domainTargets) {
+                    for (path in paths) {
+                        val apiUrl = "$domain$path"
+                        val responseText = suspendCancellable {
+                            runCatching {
+                                withTimeoutOrNull(2500L) {
+                                    app.get(apiUrl, headers = yflixHeaders, timeout = 3L).text
+                                }
+                            }.getOrNull()
+                        } ?: continue
+
+                        if (responseText.isBlank() || responseText.contains("404 Not Found", ignoreCase = true)) continue
+
+                        var rawJson = responseText
+                        if (responseText.startsWith("{") && !responseText.contains("\"url\"") && responseText.contains("\"data\"")) {
+                            val encData = runCatching { JSONObject(responseText).optString("data") }.getOrNull()
+                            if (!encData.isNullOrBlank()) {
+                                val decrypted = yflixDecodeReverse(encData)
+                                if (decrypted.isNotBlank()) rawJson = decrypted
+                            }
+                        } else if (!responseText.startsWith("{")) {
+                            val decoded = yflixDecodeReverse(responseText.trim())
+                            if (decoded.isNotBlank() && decoded.startsWith("{")) {
+                                rawJson = decoded
+                            }
+                        }
+
+                        var videoUrl: String? = null
+                        if (rawJson.startsWith("{")) {
+                            videoUrl = runCatching { yflixextractVideoUrlFromJson(rawJson) }.getOrNull()
+                            if (videoUrl.isNullOrBlank()) {
+                                val json = runCatching { JSONObject(rawJson) }.getOrNull()
+                                videoUrl = json?.optString("streamUrl")?.takeIf { it.isNotBlank() }
+                                    ?: json?.optString("file")?.takeIf { it.isNotBlank() }
+                                    ?: json?.optString("url")?.takeIf { it.isNotBlank() }
+                            }
+
+                            val subsArray = runCatching {
+                                JSONObject(rawJson).optJSONArray("subtitles") ?: JSONObject(rawJson).optJSONArray("tracks")
+                            }.getOrNull()
+                            if (subsArray != null && subtitleCallback != null) {
+                                for (i in 0 until subsArray.length()) {
+                                    val subObj = subsArray.optJSONObject(i) ?: continue
+                                    val subFile = subObj.optString("file").takeIf { it.isNotBlank() }
+                                        ?: subObj.optString("url").takeIf { it.isNotBlank() } ?: continue
+                                    val subLang = subObj.optString("label").takeIf { it.isNotBlank() }
+                                        ?: subObj.optString("lang").takeIf { it.isNotBlank() } ?: "English"
+                                    if (!subFile.contains("thumbnail", ignoreCase = true)) {
+                                        subtitleCallback(
+                                            SubtitleFile(
+                                                lang = cleanSubtitleLabel(subLang),
+                                                url = subFile
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!videoUrl.isNullOrBlank()) {
+                            val streamHeaders = mapOf(
+                                "User-Agent" to USER_AGENT,
+                                "Referer" to "$domain/",
+                                "Origin" to domain
+                            )
+                            val isM3u8 = videoUrl.contains(".m3u8", ignoreCase = true)
+                            val streamType = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            val variants = if (isM3u8) {
+                                runCatching {
+                                    generateM3u8("YFlix", videoUrl, "$domain/", headers = streamHeaders)
+                                }.getOrNull()
+                            } else null
+
+                            emitTopTierDualQualityStreamLinks(
+                                source = "YFlix",
+                                baseName = "YFlix",
+                                url = videoUrl,
+                                referer = "$domain/",
+                                headers = streamHeaders,
+                                streamType = streamType,
+                                generatedLinks = variants,
+                                callback = callback
+                            )
+                            return@withTimeoutOrNull
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w("StreamPlay", "invokeYFlix failed: ${e.message}")
+        }
+    }
+
+    suspend fun invokeYFlix(
+        title: String?,
+        year: Int?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: ((SubtitleFile) -> Unit)? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        invokeYFlix(title, tmdbId = null, imdbId = null, year = year, season = season, episode = episode, subtitleCallback = subtitleCallback, callback = callback)
+    }
+
+    suspend fun invokeYFlix(
+        title: String?,
+        year: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        invokeYFlix(title, tmdbId = null, imdbId = null, year = year, season = season, episode = episode, subtitleCallback = null, callback = callback)
+    }
+
+    suspend fun invokeYFlix(
+        title: String?,
+        tmdbId: Int?,
+        year: Int?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: ((SubtitleFile) -> Unit)? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        invokeYFlix(title, tmdbId = tmdbId, imdbId = null, year = year, season = season, episode = episode, subtitleCallback = subtitleCallback, callback = callback)
+    }
+
+    suspend fun invokeYFlix(
+        title: String?,
+        tmdbId: Int?,
+        year: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        invokeYFlix(title, tmdbId = tmdbId, imdbId = null, year = year, season = season, episode = episode, subtitleCallback = null, callback = callback)
+    }
+
+    suspend fun invokeCineJoy(
+        title: String?,
+        tmdbId: Int? = null,
+        imdbId: String? = null,
+        year: Int? = null,
+        season: Int? = null,
+        episode: Int? = null,
+        subtitleCallback: ((SubtitleFile) -> Unit)? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            if (title.isNullOrBlank() && tmdbId == null && imdbId.isNullOrBlank()) return
+            if (season != null && season != 0 && episode == null) return
+
+            withTimeoutOrNull(3000L) {
+                val cinejoyBase = "https://cinejoy.to"
+                val cinejoyHeaders = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to "$cinejoyBase/",
+                    "Origin" to cinejoyBase,
+                    "Accept" to "application/json, text/plain, */*"
+                )
+
+                val isTv = (season != null && season > 0) || (episode != null && episode > 0)
+                val cleanTitle = title?.replace(Regex("[^a-zA-Z0-9\\s]"), " ")?.trim()?.replace(Regex("\\s+"), "-")?.lowercase(Locale.ROOT) ?: ""
+
+                val apiPaths = if (isTv) {
+                    listOf(
+                        if (tmdbId != null) "/api/stream/tv/$tmdbId/$season/$episode" else null,
+                        if (!imdbId.isNullOrBlank()) "/api/stream/tv/$imdbId/$season/$episode" else null,
+                        "/api/v1/watch/tv?title=$cleanTitle&s=$season&e=$episode",
+                        "/api/watch?title=$cleanTitle&season=$season&episode=$episode"
+                    ).filterNotNull()
+                } else {
+                    listOf(
+                        if (tmdbId != null) "/api/stream/movie/$tmdbId" else null,
+                        if (!imdbId.isNullOrBlank()) "/api/stream/movie/$imdbId" else null,
+                        "/api/v1/watch/movie?title=$cleanTitle&y=${year ?: ""}",
+                        "/api/watch?title=$cleanTitle&year=${year ?: ""}"
+                    ).filterNotNull()
+                }
+
+                for (path in apiPaths) {
+                    val fullUrl = "$cinejoyBase$path"
+                    val response = suspendCancellable {
+                        runCatching {
+                            withTimeoutOrNull(2500L) {
+                                app.get(fullUrl, headers = cinejoyHeaders, timeout = 3L).text
+                            }
+                        }.getOrNull()
+                    } ?: continue
+
+                    if (response.isBlank() || response.contains("404 Not Found", ignoreCase = true)) continue
+
+                    val json = runCatching { JSONObject(response) }.getOrNull() ?: continue
+                    val streamUrl = json.optString("url").takeIf { it.isNotBlank() }
+                        ?: json.optString("stream").takeIf { it.isNotBlank() }
+                        ?: json.optString("file").takeIf { it.isNotBlank() }
+                        ?: continue
+
+                    val tracksArray = json.optJSONArray("subtitles") ?: json.optJSONArray("tracks")
+                    if (tracksArray != null && subtitleCallback != null) {
+                        for (i in 0 until tracksArray.length()) {
+                            val trackObj = tracksArray.optJSONObject(i) ?: continue
+                            val trackUrl = trackObj.optString("file").takeIf { it.isNotBlank() }
+                                ?: trackObj.optString("url").takeIf { it.isNotBlank() } ?: continue
+                            val trackLabel = trackObj.optString("label").takeIf { it.isNotBlank() }
+                                ?: trackObj.optString("lang").takeIf { it.isNotBlank() } ?: "English"
+                            val trackKind = trackObj.optString("kind", "subtitles")
+                            if (!trackUrl.contains("thumbnail", ignoreCase = true) && !trackKind.equals("thumbnails", ignoreCase = true)) {
+                                subtitleCallback(
+                                    SubtitleFile(
+                                        lang = cleanSubtitleLabel(trackLabel),
+                                        url = trackUrl
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    val isM3u8 = streamUrl.contains(".m3u8", ignoreCase = true)
+                    val streamType = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    val streamHeaders = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to "$cinejoyBase/",
+                        "Origin" to cinejoyBase
+                    )
+
+                    val variants = if (isM3u8) {
+                        runCatching {
+                            generateM3u8("CineJoy", streamUrl, "$cinejoyBase/", headers = streamHeaders)
+                        }.getOrNull()
+                    } else null
+
+                    emitTopTierDualQualityStreamLinks(
+                        source = "CineJoy",
+                        baseName = "CineJoy",
+                        url = streamUrl,
+                        referer = "$cinejoyBase/",
+                        headers = streamHeaders,
+                        streamType = streamType,
+                        generatedLinks = variants,
+                        callback = callback
+                    )
+                    return@withTimeoutOrNull
+                }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w("StreamPlay", "invokeCineJoy failed: ${e.message}")
+        }
+    }
+
+    suspend fun invokeCineJoy(
+        title: String?,
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: ((SubtitleFile) -> Unit)? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        invokeCineJoy(title, tmdbId = tmdbId, imdbId = null, year = null, season = season, episode = episode, subtitleCallback = subtitleCallback, callback = callback)
+    }
+
+    suspend fun invokeCineJoy(
+        title: String?,
+        tmdbId: Int?,
+        season: Int?,
+        episode: Int?,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        invokeCineJoy(title, tmdbId = tmdbId, imdbId = null, year = null, season = season, episode = episode, subtitleCallback = null, callback = callback)
+    }
+
     //Need Fix Encrypted Links
     suspend fun invokeVidFast(
         tmdbId: Int? = null,
@@ -5675,7 +5989,7 @@ object StreamPlayExtractor : StreamPlay() {
         try {
             if (tmdbId == null || (season != null && season != 0 && episode == null)) return
 
-            withTimeoutOrNull(9500L) {
+            withTimeoutOrNull(2500L) {
                 val key = generateHexKey32()
 
                 val baseHeaders = mapOf(
@@ -5689,8 +6003,8 @@ object StreamPlayExtractor : StreamPlay() {
                 val apiBase = "https://enc-dec.app/api"
 
                 val token = encDecApiSemaphore.withPermit {
-                    retryTransient(3, 400L) {
-                        safeGet("$apiBase/enc-hexa", headers = baseHeaders, timeout = 8L).parsedSafe<HexaEn>()
+                    retryTransient(1, 100L) {
+                        safeGet("$apiBase/enc-hexa", headers = baseHeaders, timeout = 2L).parsedSafe<HexaEn>()
                     }
                 }?.result?.token ?: return@withTimeoutOrNull
 
@@ -5867,7 +6181,7 @@ object StreamPlayExtractor : StreamPlay() {
         try {
             if (tmdbId == null || (season != null && season != 0 && episode == null)) return
 
-            withTimeoutOrNull(9500L) {
+            withTimeoutOrNull(2500L) {
                 val paths = if (season == null || (season == 0 && episode == null)) {
                     listOf("/embed/movie/$tmdbId", "/movie/$tmdbId")
                 } else {
@@ -5988,8 +6302,8 @@ object StreamPlayExtractor : StreamPlay() {
                     val url = "$domain$path"
                     val headers = baseHeaders + mapOf("Referer" to "$domain/")
                     val response = suspendCancellable {
-                        withTimeoutOrNull(2500L) {
-                            safeGet(url, headers = headers, timeout = 4L)
+                        withTimeoutOrNull(1500L) {
+                            safeGet(url, headers = headers, timeout = 2L)
                         }
                     }
                     if (response == null) {

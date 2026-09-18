@@ -85,6 +85,8 @@ internal val NON_ANIME_PROVIDERS = setOf(
     "rivestream",
     "vidrock",
     "vidlink",
+    "yflix",
+    "cinejoy",
     "kisskh",
     "dahmermovies",
     "HexaSU",
@@ -884,15 +886,15 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
             val boost = FAST_PROVIDER_BOOST[it.id] ?: 0f
             if (boost >= 55f) boost.toInt() else null
         }.toSet()
-        val runningTopRanks = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
-        runningTopRanks.addAll(activeTopRanks)
+        val runningTopProviders = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        runningTopProviders.addAll(applicableProviders.filter { (FAST_PROVIDER_BOOST[it.id] ?: 0f) >= 55f }.map { it.id })
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
             upstreamCallback = callback,
             scope = this,
             topSourceGraceMs = 1200L,
             top720GraceMs = 2500L,
             activeTopRanks = activeTopRanks,
-            isRankInFlight = { rank -> runningTopRanks.contains(rank) }
+            isRankInFlight = { rank -> runningTopProviders.any { (FAST_PROVIDER_BOOST[it] ?: 0f).toInt() == rank } }
         )
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator(
             upstreamCallback = { link -> dispatcher.onLinkAccepted(link) },
@@ -1009,9 +1011,12 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
                 } finally {
                     val boost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
                     if (boost >= 55f) {
+                        runningTopProviders.remove(provider.id)
                         val rank = boost.toInt()
-                        runningTopRanks.remove(rank)
-                        dispatcher.markRankCompleted(rank)
+                        val hasRemainingWithRank = runningTopProviders.any { (FAST_PROVIDER_BOOST[it] ?: 0f).toInt() == rank }
+                        if (!hasRemainingWithRank) {
+                            dispatcher.markRankCompleted(rank)
+                        }
                     }
                 }
             }

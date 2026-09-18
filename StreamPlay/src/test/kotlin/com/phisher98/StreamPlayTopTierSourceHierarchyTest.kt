@@ -44,8 +44,8 @@ class StreamPlayTopTierSourceHierarchyTest {
     fun testDefinitiveTopTierSourcesOrderAndRegistration() {
         val expectedOrder = listOf(
             "vidlink",
-            "HexaSU",
-            "autoembed",
+            "yflix",
+            "cinejoy",
             "vidfast",
             "VidEasy",
             "vidsrc"
@@ -67,11 +67,16 @@ class StreamPlayTopTierSourceHierarchyTest {
         // 3. Verify SuperStream is NOT registered
         assertFalse("SuperStream must NOT be registered in buildProviders()", providerMap.containsKey("superstream"))
 
-        // 4. Verify AutoEmbed provider details
-        val autoembed = providerMap["autoembed"]
-        assertNotNull("AutoEmbed provider must exist", autoembed)
-        assertEquals("AutoEmbed", autoembed?.name)
-        assertEquals(ProviderKind.VIDEO, autoembed?.kind)
+        // 4. Verify SOTA provider details
+        val yflix = providerMap["yflix"]
+        assertNotNull("YFlix provider must exist", yflix)
+        assertEquals("YFlix", yflix?.name)
+        assertEquals(ProviderKind.VIDEO, yflix?.kind)
+
+        val cinejoy = providerMap["cinejoy"]
+        assertNotNull("CineJoy provider must exist", cinejoy)
+        assertEquals("CineJoy", cinejoy?.name)
+        assertEquals(ProviderKind.VIDEO, cinejoy?.kind)
     }
 
     @Test
@@ -259,11 +264,12 @@ class StreamPlayTopTierSourceHierarchyTest {
     @Test
     fun testMigrationForUpgradingUserEnablesAutoembedAndDisablesSuperStream() {
         val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
-        // Simulate legacy user who had old defaults initialized (autoembed disabled, superstream present)
-        val oldDisabled = getDefaultDisabledProviderIds() + "autoembed"
+        // Simulate legacy user who had old defaults initialized (HexaSU & autoembed present, yflix & cinejoy disabled)
+        val oldDisabled = getDefaultDisabledProviderIds() + "yflix" + "cinejoy"
         mockPrefs.edit()
             .putStringSet("disabled_providers", oldDisabled)
             .putBoolean("streamplay_top5_defaults_initialized", true)
+            .putBoolean("streamplay_top_tier_v6_initialized", true)
             .apply()
 
         // Run unified initialization/migration
@@ -271,9 +277,12 @@ class StreamPlayTopTierSourceHierarchyTest {
         val allProviders = buildProviders()
         val active = allProviders.map { it.id }.filterNot { finalDisabled.contains(it) }.toSet()
 
-        // AutoEmbed must be enabled (removed from disabled_providers)
-        assertFalse("AutoEmbed must not be disabled after migration", finalDisabled.contains("autoembed"))
-        // SuperStream must be explicitly disabled in migration
+        // SOTA providers must be enabled (removed from disabled_providers)
+        assertFalse("YFlix must not be disabled after migration", finalDisabled.contains("yflix"))
+        assertFalse("CineJoy must not be disabled after migration", finalDisabled.contains("cinejoy"))
+        // Dead providers must be explicitly disabled in migration
+        assertTrue("AutoEmbed must be in disabled_providers after migration", finalDisabled.contains("autoembed"))
+        assertTrue("HexaSU must be in disabled_providers after migration", finalDisabled.contains("HexaSU"))
         assertTrue("SuperStream must be in disabled_providers after migration", finalDisabled.contains("superstream"))
         assertEquals("All 6 top-tier providers must be active after migration", DEFAULT_TOP_TIER_PROVIDERS, active)
         assertTrue(mockPrefs.getBoolean(PREFS_TOP_TIER_INITIALIZED, false))
@@ -718,7 +727,7 @@ class StreamPlayTopTierSourceHierarchyTest {
     fun testTopTierProvidersOrderInProvidersList() {
         val allProviders = buildProviders()
         val top5 = allProviders.take(5).map { it.id }
-        val expected = listOf("vidlink", "HexaSU", "autoembed", "vidfast", "VidEasy")
+        val expected = listOf("vidlink", "yflix", "cinejoy", "vidfast", "VidEasy")
         assertEquals("ProvidersList must define top-tier providers in strict priority order", expected, top5)
     }
 

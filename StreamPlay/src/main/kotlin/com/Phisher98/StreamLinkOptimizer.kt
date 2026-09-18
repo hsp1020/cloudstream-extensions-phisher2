@@ -453,6 +453,17 @@ object StreamLinkOptimizer {
             lowerUrl.contains("vidlink.pro") ||
             lowerUrl.contains("hakunaymatata") ||
             hadVidlinkHeader
+        val isYFlix = source?.contains("yflix", ignoreCase = true) == true ||
+            name?.contains("yflix", ignoreCase = true) == true ||
+            source?.contains("moviesflix", ignoreCase = true) == true ||
+            name?.contains("moviesflix", ignoreCase = true) == true ||
+            lowerUrl.contains("yflix.to") ||
+            lowerUrl.contains("moviesflix") ||
+            referer?.contains("yflix.to", ignoreCase = true) == true
+        val isCineJoy = source?.contains("cinejoy", ignoreCase = true) == true ||
+            name?.contains("cinejoy", ignoreCase = true) == true ||
+            lowerUrl.contains("cinejoy.to") ||
+            referer?.contains("cinejoy.to", ignoreCase = true) == true
         val isHexa = source?.contains("hexa", ignoreCase = true) == true ||
             name?.contains("hexa", ignoreCase = true) == true ||
             source?.contains("embedsu", ignoreCase = true) == true ||
@@ -606,6 +617,14 @@ object StreamLinkOptimizer {
             lowerUrl.contains("gofile.io") -> {
                 headers[HEADER_REFERER] = "https://gofile.io/"
                 headers[HEADER_ORIGIN] = "https://gofile.io"
+            }
+            lowerUrl.contains("yflix.to") || isYFlix -> {
+                headers[HEADER_REFERER] = "https://yflix.to/"
+                headers[HEADER_ORIGIN] = "https://yflix.to"
+            }
+            lowerUrl.contains("cinejoy.to") || isCineJoy -> {
+                headers[HEADER_REFERER] = "https://cinejoy.to/"
+                headers[HEADER_ORIGIN] = "https://cinejoy.to"
             }
             lowerUrl.contains("embed.su") || lowerUrl.contains("hexa.su") || lowerUrl.contains("flixer.su") || isHexa -> {
                 val hexaHost = when {
@@ -769,6 +788,17 @@ object StreamLinkOptimizer {
             lowerUrl.contains("hakunaymatata") ||
             referer?.contains("vidlink.pro", ignoreCase = true) == true ||
             hadVidlinkHeader
+        val isYFlix = source?.contains("yflix", ignoreCase = true) == true ||
+            name?.contains("yflix", ignoreCase = true) == true ||
+            source?.contains("moviesflix", ignoreCase = true) == true ||
+            name?.contains("moviesflix", ignoreCase = true) == true ||
+            lowerUrl.contains("yflix.to") ||
+            lowerUrl.contains("moviesflix") ||
+            referer?.contains("yflix.to", ignoreCase = true) == true
+        val isCineJoy = source?.contains("cinejoy", ignoreCase = true) == true ||
+            name?.contains("cinejoy", ignoreCase = true) == true ||
+            lowerUrl.contains("cinejoy.to") ||
+            referer?.contains("cinejoy.to", ignoreCase = true) == true
         val isHexa = source?.contains("hexa", ignoreCase = true) == true ||
             name?.contains("hexa", ignoreCase = true) == true ||
             source?.contains("embedsu", ignoreCase = true) == true ||
@@ -838,6 +868,8 @@ object StreamLinkOptimizer {
             VEXSTREAM_HOST_REGEX.containsMatchIn(lowerUrl) -> "https://vexstream.org/"
             MULTIEMBED_HOST_REGEX.containsMatchIn(lowerUrl) -> "https://multiembed.mov/"
             lowerUrl.contains("gofile.io") -> "https://gofile.io/"
+            lowerUrl.contains("yflix.to") || isYFlix -> "https://yflix.to/"
+            lowerUrl.contains("cinejoy.to") || isCineJoy -> "https://cinejoy.to/"
             lowerUrl.contains("embed.su") || lowerUrl.contains("hexa.su") || lowerUrl.contains("flixer.su") || isHexa -> {
                 when {
                     lowerUrl.contains("embed.su") || referer?.contains("embed.su") == true ||
@@ -1371,6 +1403,8 @@ object StreamLinkOptimizer {
     fun isTopTierProvider(providerId: String): Boolean {
         val p = providerId.lowercase(Locale.ROOT)
         return p.contains("vidlink") ||
+            p.contains("yflix") || p.contains("moviesflix") ||
+            p.contains("cinejoy") ||
             p.contains("hexasu") || p.contains("embedsu") || p.contains("flixer") || p == "hexa" ||
             p.contains("autoembed") ||
             p.contains("vidfast") ||
@@ -1741,10 +1775,12 @@ object StreamLinkOptimizer {
         val u = link.url.lowercase(Locale.ROOT)
         return when {
             s.contains("vidlink") || n.contains("vidlink") || u.contains("vidlink.pro") || u.contains("hakunaymatata") -> 100
-            s.contains("hexasu") || s.contains("hexa.su") || s.contains("embedsu") || s.contains("embed.su") || s.contains("hexa") || s.contains("flixer") ||
+            s.contains("yflix") || s.contains("moviesflix") || n.contains("yflix") || n.contains("moviesflix") || u.contains("yflix") || u.contains("moviesflix") ||
+                s.contains("hexasu") || s.contains("hexa.su") || s.contains("embedsu") || s.contains("embed.su") || s.contains("hexa") || s.contains("flixer") ||
                 n.contains("hexasu") || n.contains("embedsu") || n.contains("embed.su") || n.contains("hexa") || n.contains("flixer") ||
                 u.contains("hexa.su") || u.contains("embed.su") || u.contains("flixer.su") || u.contains("flixer") -> 90
-            s.contains("autoembed") || n.contains("autoembed") || u.contains("autoembed.cc") || u.contains("player.autoembed.cc") || u.contains("autoembed.to") || u.contains("autoembed.co") -> 80
+            s.contains("cinejoy") || n.contains("cinejoy") || u.contains("cinejoy") ||
+                s.contains("autoembed") || n.contains("autoembed") || u.contains("autoembed.cc") || u.contains("player.autoembed.cc") || u.contains("autoembed.to") || u.contains("autoembed.co") -> 80
             s.contains("vidfast") || n.contains("vidfast") || u.contains("vidfast.pro") || u.contains("vidfast.vc") ||
                 ((u.contains("peakstorm.top") || u.contains("hypergate.top")) && !s.contains("videasy") && !n.contains("videasy")) -> 70
             s.contains("videasy") || n.contains("videasy") || u.contains("videasy") || u.contains("speedracelight.com") || u.contains("videasy.to") || u.contains("videasy.net") || u.contains("cineby.sc") ||
@@ -2296,7 +2332,9 @@ object StreamLinkOptimizer {
         fun markProviderCompleted(providerId: String) {
             val rank = when {
                 providerId.contains("vidlink", ignoreCase = true) -> 100
+                providerId.contains("yflix", ignoreCase = true) || providerId.contains("moviesflix", ignoreCase = true) -> 90
                 providerId.contains("hexa", ignoreCase = true) -> 90
+                providerId.contains("cinejoy", ignoreCase = true) -> 80
                 providerId.contains("autoembed", ignoreCase = true) -> 80
                 providerId.contains("vidfast", ignoreCase = true) -> 70
                 providerId.contains("videasy", ignoreCase = true) -> 60
