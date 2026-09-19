@@ -371,13 +371,13 @@ class DualQualityAndSotaHierarchyTest {
         val emittedList = mutableListOf<ExtractorLink>()
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator { emittedList.add(it) }
 
-        val mp4_720 = createLink("Scraper", "Direct [720p]", "https://direct.cdn.com/movie.mp4", Qualities.P720.value, type = ExtractorLinkType.VIDEO)
         val mp4_1080 = createLink("Scraper", "Direct [1080p]", "https://direct.cdn.com/movie.mp4", Qualities.P1080.value, type = ExtractorLinkType.VIDEO)
+        val mp4_720 = createLink("Scraper", "Direct [720p]", "https://direct.cdn.com/movie.mp4", Qualities.P720.value, type = ExtractorLinkType.VIDEO)
 
-        assertEquals(StreamLinkOptimizer.DeduplicationResult.NEW, deduplicator.emitDetailed(mp4_720))
-        assertEquals("For single MP4 file, 1080p upgrades 720p", StreamLinkOptimizer.DeduplicationResult.UPGRADED, deduplicator.emitDetailed(mp4_1080))
+        assertEquals(StreamLinkOptimizer.DeduplicationResult.NEW, deduplicator.emitDetailed(mp4_1080))
+        assertEquals("For single MP4 file, 720p upgrades 1080p under user priority", StreamLinkOptimizer.DeduplicationResult.UPGRADED, deduplicator.emitDetailed(mp4_720))
         assertEquals(1, deduplicator.getEmittedCount())
-        assertEquals(Qualities.P1080.value, deduplicator.getEmittedLinks().first().quality)
+        assertEquals(Qualities.P720.value, deduplicator.getEmittedLinks().first().quality)
     }
 
     @Test
@@ -608,16 +608,16 @@ class DualQualityAndSotaHierarchyTest {
 
             assertEquals("$sourceName must have rank $expectedRank", expectedRank, StreamLinkOptimizer.getSourcePriorityRank(link720))
 
-            val res720 = deduplicator.emitDetailed(link720)
             val res1080 = deduplicator.emitDetailed(link1080)
+            val res720 = deduplicator.emitDetailed(link720)
 
-            assertEquals("$sourceName 720p must be NEW", StreamLinkOptimizer.DeduplicationResult.NEW, res720)
-            assertEquals("$sourceName 1080p must upgrade 720p rather than coexisting as duplicate URL", StreamLinkOptimizer.DeduplicationResult.UPGRADED, res1080)
+            assertEquals("$sourceName 1080p must be NEW", StreamLinkOptimizer.DeduplicationResult.NEW, res1080)
+            assertEquals("$sourceName 720p must upgrade 1080p rather than coexisting as duplicate URL", StreamLinkOptimizer.DeduplicationResult.UPGRADED, res720)
 
             assertEquals("$sourceName must deduplicate direct video to exactly 1 stream", 1, deduplicator.getEmittedCount())
             val emittedLinks = deduplicator.getEmittedLinks()
             assertEquals(1, emittedLinks.size)
-            assertEquals(Qualities.P1080.value, emittedLinks.first().quality)
+            assertEquals(Qualities.P720.value, emittedLinks.first().quality)
             assertEquals(streamUrl, emittedLinks.first().url)
         }
     }
@@ -1617,10 +1617,10 @@ class DualQualityAndSotaHierarchyTest {
         val key1080 = StreamLinkOptimizer.canonicalStreamKey(link1080)
         assertEquals("Direct video canonical keys must be identical without quality suffix", key720, key1080)
 
-        val res1 = deduplicator.emitDetailed(link720)
-        val res2 = deduplicator.emitDetailed(link1080)
+        val res1 = deduplicator.emitDetailed(link1080)
+        val res2 = deduplicator.emitDetailed(link720)
         assertEquals("First stream is accepted as NEW", StreamLinkOptimizer.DeduplicationResult.NEW, res1)
-        assertEquals("Higher-quality duplicate of identical URL upgrades existing entry", StreamLinkOptimizer.DeduplicationResult.UPGRADED, res2)
+        assertEquals("Higher-priority 720p duplicate of identical URL upgrades existing entry", StreamLinkOptimizer.DeduplicationResult.UPGRADED, res2)
         assertEquals("Deduplicator retains exactly 1 stream entry for direct video", 1, deduplicator.getEmittedCount())
     }
 

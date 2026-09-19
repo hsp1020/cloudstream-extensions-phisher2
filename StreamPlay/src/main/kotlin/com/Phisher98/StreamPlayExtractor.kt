@@ -31,11 +31,14 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.nicehttp.Requests
 import com.lagradost.nicehttp.Session
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -5247,6 +5250,17 @@ object StreamPlayExtractor : StreamPlay() {
         invokeVidlink(tmdbId, season, episode, subtitleCallback = null, callback = callback)
     }
 
+    private data class YFlixCandidateResult(
+        val domain: String,
+        val videoUrl: String,
+        val rawJson: String
+    )
+
+    private data class CineJoyCandidateResult(
+        val streamUrl: String,
+        val json: JSONObject
+    )
+
     suspend fun invokeYFlix(
         title: String?,
         tmdbId: Int? = null,
@@ -5261,120 +5275,143 @@ object StreamPlayExtractor : StreamPlay() {
             if (title.isNullOrBlank() && tmdbId == null && imdbId.isNullOrBlank()) return
             if (season != null && season != 0 && episode == null) return
 
-            withTimeoutOrNull(3000L) {
-                val yflixHeaders = mapOf(
-                    "User-Agent" to USER_AGENT,
-                    "Referer" to "https://yflix.to/",
-                    "Origin" to "https://yflix.to",
-                    "Accept" to "application/json, text/plain, */*"
-                )
-
+            withTimeoutOrNull(2800L) {
                 val domainTargets = listOf("https://yflix.to", "https://moviesflix.to", "https://yflix.cc")
                 val cleanTitle = title?.replace(Regex("[^a-zA-Z0-9\\s]"), " ")?.trim()?.replace(Regex("\\s+"), "-")?.lowercase(Locale.ROOT) ?: ""
 
                 val isTv = (season != null && season > 0) || (episode != null && episode > 0)
                 val paths = if (isTv) {
                     listOf(
-                        "/api/stream/tv?title=$cleanTitle&season=$season&episode=$episode&year=${year ?: ""}",
-                        "/api/v1/watch?title=$cleanTitle&season=$season&episode=$episode",
                         if (tmdbId != null) "/api/source/tmdb/tv/$tmdbId/$season/$episode" else null,
-                        if (!imdbId.isNullOrBlank()) "/api/source/imdb/tv/$imdbId/$season/$episode" else null
+                        if (!imdbId.isNullOrBlank()) "/api/source/imdb/tv/$imdbId/$season/$episode" else null,
+                        "/api/stream/tv?title=$cleanTitle&season=$season&episode=$episode&year=${year ?: ""}",
+                        "/api/v1/watch?title=$cleanTitle&season=$season&episode=$episode"
                     ).filterNotNull()
                 } else {
                     listOf(
-                        "/api/stream/movie?title=$cleanTitle&year=${year ?: ""}",
-                        "/api/v1/watch?title=$cleanTitle&year=${year ?: ""}",
                         if (tmdbId != null) "/api/source/tmdb/movie/$tmdbId" else null,
-                        if (!imdbId.isNullOrBlank()) "/api/source/imdb/movie/$imdbId" else null
+                        if (!imdbId.isNullOrBlank()) "/api/source/imdb/movie/$imdbId" else null,
+                        "/api/stream/movie?title=$cleanTitle&year=${year ?: ""}",
+                        "/api/v1/watch?title=$cleanTitle&year=${year ?: ""}"
                     ).filterNotNull()
                 }
 
-                for (domain in domainTargets) {
-                    for (path in paths) {
-                        val apiUrl = "$domain$path"
-                        val responseText = suspendCancellable {
-                            runCatching {
-                                withTimeoutOrNull(2500L) {
+                val candidates = domainTargets.flatMap { domain -> paths.map { path -> domain to path } }
+                if (candidates.isEmpty()) return@withTimeoutOrNull
+
+                val winnerDeferred = CompletableDeferred<YFlixCandidateResult?>()
+
+                val winner = coroutineScope {
+                    val jobs = candidates.map { (domain, path) ->
+                        launch(Dispatchers.IO) {
+                            if (winnerDeferred.isCompleted) return@launch
+                            try {
+                                val apiUrl = "$domain$path"
+                                val yflixHeaders = mapOf(
+                                    "User-Agent" to USER_AGENT,
+                                    "Referer" to "$domain/",
+                                    "Origin" to domain,
+                                    "Accept" to "application/json, text/plain, */*"
+                                )
+                                val responseText = withTimeoutOrNull(2200L) {
                                     app.get(apiUrl, headers = yflixHeaders, timeout = 3L).text
-                                }
-                            }.getOrNull()
-                        } ?: continue
+                                } ?: return@launch
 
-                        if (responseText.isBlank() || responseText.contains("404 Not Found", ignoreCase = true)) continue
+                                if (responseText.isBlank() || responseText.contains("404 Not Found", ignoreCase = true)) return@launch
 
-                        var rawJson = responseText
-                        if (responseText.startsWith("{") && !responseText.contains("\"url\"") && responseText.contains("\"data\"")) {
-                            val encData = runCatching { JSONObject(responseText).optString("data") }.getOrNull()
-                            if (!encData.isNullOrBlank()) {
-                                val decrypted = yflixDecodeReverse(encData)
-                                if (decrypted.isNotBlank()) rawJson = decrypted
-                            }
-                        } else if (!responseText.startsWith("{")) {
-                            val decoded = yflixDecodeReverse(responseText.trim())
-                            if (decoded.isNotBlank() && decoded.startsWith("{")) {
-                                rawJson = decoded
-                            }
-                        }
-
-                        var videoUrl: String? = null
-                        if (rawJson.startsWith("{")) {
-                            videoUrl = runCatching { yflixextractVideoUrlFromJson(rawJson) }.getOrNull()
-                            if (videoUrl.isNullOrBlank()) {
-                                val json = runCatching { JSONObject(rawJson) }.getOrNull()
-                                videoUrl = json?.optString("streamUrl")?.takeIf { it.isNotBlank() }
-                                    ?: json?.optString("file")?.takeIf { it.isNotBlank() }
-                                    ?: json?.optString("url")?.takeIf { it.isNotBlank() }
-                            }
-
-                            val subsArray = runCatching {
-                                JSONObject(rawJson).optJSONArray("subtitles") ?: JSONObject(rawJson).optJSONArray("tracks")
-                            }.getOrNull()
-                            if (subsArray != null && subtitleCallback != null) {
-                                for (i in 0 until subsArray.length()) {
-                                    val subObj = subsArray.optJSONObject(i) ?: continue
-                                    val subFile = subObj.optString("file").takeIf { it.isNotBlank() }
-                                        ?: subObj.optString("url").takeIf { it.isNotBlank() } ?: continue
-                                    val subLang = subObj.optString("label").takeIf { it.isNotBlank() }
-                                        ?: subObj.optString("lang").takeIf { it.isNotBlank() } ?: "English"
-                                    if (!subFile.contains("thumbnail", ignoreCase = true)) {
-                                        subtitleCallback(
-                                            SubtitleFile(
-                                                lang = cleanSubtitleLabel(subLang),
-                                                url = subFile
-                                            )
-                                        )
+                                var rawJson = responseText
+                                if (responseText.startsWith("{") && !responseText.contains("\"url\"") && responseText.contains("\"data\"")) {
+                                    val encData = runCatching { JSONObject(responseText).optString("data") }.getOrNull()
+                                    if (!encData.isNullOrBlank()) {
+                                        val decrypted = yflixDecodeReverse(encData)
+                                        if (decrypted.isNotBlank()) rawJson = decrypted
+                                    }
+                                } else if (!responseText.startsWith("{")) {
+                                    val decoded = yflixDecodeReverse(responseText.trim())
+                                    if (decoded.isNotBlank() && decoded.startsWith("{")) {
+                                        rawJson = decoded
                                     }
                                 }
+
+                                if (rawJson.startsWith("{")) {
+                                    var videoUrl = runCatching { yflixextractVideoUrlFromJson(rawJson) }.getOrNull()
+                                    if (videoUrl.isNullOrBlank()) {
+                                        val json = runCatching { JSONObject(rawJson) }.getOrNull()
+                                        videoUrl = json?.optString("streamUrl")?.takeIf { it.isNotBlank() }
+                                            ?: json?.optString("file")?.takeIf { it.isNotBlank() }
+                                            ?: json?.optString("url")?.takeIf { it.isNotBlank() }
+                                    }
+
+                                    if (!videoUrl.isNullOrBlank()) {
+                                        winnerDeferred.complete(YFlixCandidateResult(domain, videoUrl, rawJson))
+                                    }
+                                }
+                            } catch (e: Throwable) {
+                                if (e is CancellationException) throw e
                             }
                         }
+                    }
 
-                        if (!videoUrl.isNullOrBlank()) {
-                            val streamHeaders = mapOf(
-                                "User-Agent" to USER_AGENT,
-                                "Referer" to "$domain/",
-                                "Origin" to domain
-                            )
-                            val isM3u8 = videoUrl.contains(".m3u8", ignoreCase = true)
-                            val streamType = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            val variants = if (isM3u8) {
-                                runCatching {
-                                    generateM3u8("YFlix", videoUrl, "$domain/", headers = streamHeaders)
-                                }.getOrNull()
-                            } else null
+                    val supervisor = launch {
+                        jobs.joinAll()
+                        winnerDeferred.complete(null)
+                    }
 
-                            emitTopTierDualQualityStreamLinks(
-                                source = "YFlix",
-                                baseName = "YFlix",
-                                url = videoUrl,
-                                referer = "$domain/",
-                                headers = streamHeaders,
-                                streamType = streamType,
-                                generatedLinks = variants,
-                                callback = callback
-                            )
-                            return@withTimeoutOrNull
+                    try {
+                        winnerDeferred.await()
+                    } finally {
+                        jobs.forEach { it.cancel() }
+                        supervisor.cancel()
+                    }
+                }
+
+                if (winner != null) {
+                    val (domain, videoUrl, rawJson) = winner
+
+                    val subsArray = runCatching {
+                        JSONObject(rawJson).optJSONArray("subtitles") ?: JSONObject(rawJson).optJSONArray("tracks")
+                    }.getOrNull()
+                    if (subsArray != null && subtitleCallback != null) {
+                        for (i in 0 until subsArray.length()) {
+                            val subObj = subsArray.optJSONObject(i) ?: continue
+                            val subFile = subObj.optString("file").takeIf { it.isNotBlank() }
+                                ?: subObj.optString("url").takeIf { it.isNotBlank() } ?: continue
+                            val subLang = subObj.optString("label").takeIf { it.isNotBlank() }
+                                ?: subObj.optString("lang").takeIf { it.isNotBlank() } ?: "English"
+                            if (!subFile.contains("thumbnail", ignoreCase = true)) {
+                                subtitleCallback(
+                                    newSubtitleFile(
+                                        cleanSubtitleLabel(subLang),
+                                        subFile
+                                    )
+                                )
+                            }
                         }
                     }
+
+                    val streamHeaders = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to "$domain/",
+                        "Origin" to domain
+                    )
+                    val isM3u8 = videoUrl.contains(".m3u8", ignoreCase = true)
+                    val streamType = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    val variants = if (isM3u8) {
+                        runCatching {
+                            generateM3u8("YFlix", videoUrl, "$domain/", headers = streamHeaders)
+                        }.getOrNull()
+                    } else null
+
+                    emitTopTierDualQualityStreamLinks(
+                        source = "YFlix",
+                        baseName = "YFlix",
+                        url = videoUrl,
+                        referer = "$domain/",
+                        headers = streamHeaders,
+                        streamType = streamType,
+                        generatedLinks = variants,
+                        callback = callback
+                    )
                 }
             }
         } catch (e: Exception) {
@@ -5441,7 +5478,7 @@ object StreamPlayExtractor : StreamPlay() {
             if (title.isNullOrBlank() && tmdbId == null && imdbId.isNullOrBlank()) return
             if (season != null && season != 0 && episode == null) return
 
-            withTimeoutOrNull(3000L) {
+            withTimeoutOrNull(2800L) {
                 val cinejoyBase = "https://cinejoy.to"
                 val cinejoyHeaders = mapOf(
                     "User-Agent" to USER_AGENT,
@@ -5469,23 +5506,50 @@ object StreamPlayExtractor : StreamPlay() {
                     ).filterNotNull()
                 }
 
-                for (path in apiPaths) {
-                    val fullUrl = "$cinejoyBase$path"
-                    val response = suspendCancellable {
-                        runCatching {
-                            withTimeoutOrNull(2500L) {
-                                app.get(fullUrl, headers = cinejoyHeaders, timeout = 3L).text
+                if (apiPaths.isEmpty()) return@withTimeoutOrNull
+
+                val winnerDeferred = CompletableDeferred<CineJoyCandidateResult?>()
+
+                val winner = coroutineScope {
+                    val jobs = apiPaths.map { path ->
+                        launch(Dispatchers.IO) {
+                            if (winnerDeferred.isCompleted) return@launch
+                            try {
+                                val fullUrl = "$cinejoyBase$path"
+                                val response = withTimeoutOrNull(2200L) {
+                                    app.get(fullUrl, headers = cinejoyHeaders, timeout = 3L).text
+                                } ?: return@launch
+
+                                if (response.isBlank() || response.contains("404 Not Found", ignoreCase = true)) return@launch
+
+                                val json = runCatching { JSONObject(response) }.getOrNull() ?: return@launch
+                                val streamUrl = json.optString("url").takeIf { it.isNotBlank() }
+                                    ?: json.optString("stream").takeIf { it.isNotBlank() }
+                                    ?: json.optString("file").takeIf { it.isNotBlank() }
+                                    ?: return@launch
+
+                                winnerDeferred.complete(CineJoyCandidateResult(streamUrl, json))
+                            } catch (e: Throwable) {
+                                if (e is CancellationException) throw e
                             }
-                        }.getOrNull()
-                    } ?: continue
+                        }
+                    }
 
-                    if (response.isBlank() || response.contains("404 Not Found", ignoreCase = true)) continue
+                    val supervisor = launch {
+                        jobs.joinAll()
+                        winnerDeferred.complete(null)
+                    }
 
-                    val json = runCatching { JSONObject(response) }.getOrNull() ?: continue
-                    val streamUrl = json.optString("url").takeIf { it.isNotBlank() }
-                        ?: json.optString("stream").takeIf { it.isNotBlank() }
-                        ?: json.optString("file").takeIf { it.isNotBlank() }
-                        ?: continue
+                    try {
+                        winnerDeferred.await()
+                    } finally {
+                        jobs.forEach { it.cancel() }
+                        supervisor.cancel()
+                    }
+                }
+
+                if (winner != null) {
+                    val (streamUrl, json) = winner
 
                     val tracksArray = json.optJSONArray("subtitles") ?: json.optJSONArray("tracks")
                     if (tracksArray != null && subtitleCallback != null) {
@@ -5498,9 +5562,9 @@ object StreamPlayExtractor : StreamPlay() {
                             val trackKind = trackObj.optString("kind", "subtitles")
                             if (!trackUrl.contains("thumbnail", ignoreCase = true) && !trackKind.equals("thumbnails", ignoreCase = true)) {
                                 subtitleCallback(
-                                    SubtitleFile(
-                                        lang = cleanSubtitleLabel(trackLabel),
-                                        url = trackUrl
+                                    newSubtitleFile(
+                                        cleanSubtitleLabel(trackLabel),
+                                        trackUrl
                                     )
                                 )
                             }
@@ -5531,7 +5595,6 @@ object StreamPlayExtractor : StreamPlay() {
                         generatedLinks = variants,
                         callback = callback
                     )
-                    return@withTimeoutOrNull
                 }
             }
         } catch (e: Exception) {

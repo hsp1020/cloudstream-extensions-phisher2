@@ -368,13 +368,13 @@ class StreamLinkOptimizerTest {
         val emitted = mutableListOf<ExtractorLink>()
         val deduplicator = StreamLinkOptimizer.StreamDeduplicator { emitted.add(it) }
 
-        val stream720 = createLink(name = "Stream 720p", url = "https://cdn.example.com/v.mp4", quality = Qualities.P720.value)
         val stream1080 = createLink(name = "Stream 1080p", url = "https://cdn.example.com/v.mp4", quality = Qualities.P1080.value)
+        val stream720 = createLink(name = "Stream 720p", url = "https://cdn.example.com/v.mp4", quality = Qualities.P720.value)
 
-        assertTrue(deduplicator.emit(stream720))
-        assertTrue(deduplicator.emit(stream1080))
+        assertTrue("1080p emitted first as NEW", deduplicator.emit(stream1080))
+        assertTrue("720p upgrades 1080p under user priority hierarchy", deduplicator.emit(stream720))
         assertEquals(2, emitted.size)
-        assertEquals(Qualities.P1080.value, emitted.last().quality)
+        assertEquals(Qualities.P720.value, emitted.last().quality)
     }
 
     @Test
@@ -387,7 +387,7 @@ class StreamLinkOptimizerTest {
         val latch = CountDownLatch(numThreads)
 
         for (i in 0 until numThreads) {
-            val q = if (i == 25) Qualities.P2160.value else Qualities.P720.value
+            val q = if (i == 25) Qualities.P720.value else Qualities.P1080.value
             executor.submit {
                 try {
                     val link = createLink(
@@ -407,6 +407,6 @@ class StreamLinkOptimizerTest {
 
         assertEquals(1, deduplicator.getEmittedCount())
         val finalLink = deduplicator.getEmittedLinks().first()
-        assertEquals(Qualities.P2160.value, finalLink.quality)
+        assertEquals(Qualities.P720.value, finalLink.quality)
     }
 }

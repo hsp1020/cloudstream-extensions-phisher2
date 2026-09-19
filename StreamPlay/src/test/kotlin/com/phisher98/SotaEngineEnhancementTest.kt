@@ -449,19 +449,19 @@ class SotaEngineEnhancementTest {
 
     @Test
     fun testResolutionStrictlyPrecedesBitrateInIsBetterThan() {
-        val link1080p = createLink(
-            name = "Movie [1080p] [2500 kbps]",
-            url = "https://cdn.example.com/stream.mp4",
-            quality = Qualities.P1080.value
-        )
-        val link720pHighBitrate = createLink(
-            name = "Movie [720p] [6000 kbps]",
+        val link720pLowBitrate = createLink(
+            name = "Movie [720p] [2500 kbps]",
             url = "https://cdn.example.com/stream.mp4",
             quality = Qualities.P720.value
         )
+        val link1080pHighBitrate = createLink(
+            name = "Movie [1080p] [6000 kbps]",
+            url = "https://cdn.example.com/stream.mp4",
+            quality = Qualities.P1080.value
+        )
 
-        assertTrue("1080p must beat 720p despite 720p claiming higher bitrate", StreamLinkOptimizer.isBetterThan(link1080p, link720pHighBitrate))
-        assertFalse("720p must not beat 1080p", StreamLinkOptimizer.isBetterThan(link720pHighBitrate, link1080p))
+        assertTrue("720p must beat 1080p despite 1080p claiming higher bitrate", StreamLinkOptimizer.isBetterThan(link720pLowBitrate, link1080pHighBitrate))
+        assertFalse("1080p must not beat 720p", StreamLinkOptimizer.isBetterThan(link1080pHighBitrate, link720pLowBitrate))
     }
 
     @Test

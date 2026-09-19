@@ -401,15 +401,15 @@ class E2EIntegrationTest {
         // 4. Duplicate mirror stream with transient query params
         val mirror1 = createRawLink(
             source = "MirrorCDN",
-            name = "Mirror 720p",
+            name = "Mirror 1080p",
             url = "https://cdn1.mirror.net/stream.mp4?token=aaa&t=111",
-            quality = Qualities.P720.value
+            quality = Qualities.P1080.value
         )
         val mirror2 = createRawLink(
             source = "MirrorCDN",
-            name = "Mirror 1080p",
+            name = "Mirror 720p",
             url = "https://cdn2.mirror.net/stream.mp4?session=bbb&token=aaa",
-            quality = Qualities.P1080.value
+            quality = Qualities.P720.value
         )
         val mirror3 = createRawLink(
             source = "MirrorCDN",
@@ -418,11 +418,11 @@ class E2EIntegrationTest {
             quality = Qualities.P480.value
         )
         val emitted1 = deduplicator.emit(StreamLinkOptimizer.optimize(mirror1))
-        val emitted2 = deduplicator.emit(StreamLinkOptimizer.optimize(mirror2)) // Upgrades mirror1 to 1080p
+        val emitted2 = deduplicator.emit(StreamLinkOptimizer.optimize(mirror2)) // Upgrades mirror1 to 720p under user priority
         val emitted3 = deduplicator.emit(StreamLinkOptimizer.optimize(mirror3)) // Discarded as inferior
 
         assertTrue("Mirror 1 emitted initially", emitted1)
-        assertTrue("Mirror 2 upgrades mirror 1", emitted2)
+        assertTrue("Mirror 2 upgrades mirror 1 to 720p", emitted2)
         assertFalse("Mirror 3 discarded as inferior duplicate", emitted3)
 
         // Assertions verifying Scenario 5 invariants:
@@ -444,8 +444,8 @@ class E2EIntegrationTest {
         // Mirror deduplication verification
         val activeMirrors = deduplicator.getEmittedLinks().filter { it.source == "MirrorCDN" }
         assertEquals("Duplicate mirror deduplicated to single superior stream in deduplicator", 1, activeMirrors.size)
-        assertEquals(Qualities.P1080.value, activeMirrors.first().quality)
+        assertEquals(Qualities.P720.value, activeMirrors.first().quality)
         val emittedMirrors = collectedLinks.filter { it.source == "MirrorCDN" }
-        assertEquals("Upgraded 1080p stream is latest emitted mirror", Qualities.P1080.value, emittedMirrors.last().quality)
+        assertEquals("Upgraded 720p stream is latest emitted mirror", Qualities.P720.value, emittedMirrors.last().quality)
     }
 }

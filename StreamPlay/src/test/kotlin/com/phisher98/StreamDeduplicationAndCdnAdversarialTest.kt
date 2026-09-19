@@ -389,15 +389,15 @@ class StreamDeduplicationAndCdnAdversarialTest {
             quality = Qualities.P1080.value
         )
 
-        // 1. Emit 720p 1500 kbps
-        assertTrue("720p emitted", deduplicator.emit(mirrorCdn1))
-        // 2. Emit 1080p 4500 kbps (should upgrade)
-        assertTrue("1080p 4500kbps upgrades 720p", deduplicator.emit(mirrorEdge2))
-        // 3. Emit 1080p 2000 kbps (should be discarded as inferior bitrate)
+        // 1. Emit 1080p 4500 kbps initially
+        assertTrue("1080p 4500kbps emitted initially", deduplicator.emit(mirrorEdge2))
+        // 2. Emit 1080p 2000 kbps (should be discarded as inferior bitrate at same resolution)
         assertFalse("1080p 2000kbps discarded as inferior to 4500kbps", deduplicator.emit(mirrorSrv3))
+        // 3. Emit 720p 1500 kbps (upgrades 1080p under user priority hierarchy)
+        assertTrue("720p upgrades 1080p under priority hierarchy", deduplicator.emit(mirrorCdn1))
 
         assertEquals("Total emitted count across mirrors", 2, emitted.size)
-        assertEquals("Final retained stream is 1080p 4500kbps", mirrorEdge2, deduplicator.getEmittedLinks().first())
+        assertEquals("Final retained stream is 720p", mirrorCdn1, deduplicator.getEmittedLinks().first())
         assertEquals("Final internal map has exactly 1 deduplicated entry", 1, deduplicator.getEmittedCount())
     }
 
@@ -455,8 +455,8 @@ class StreamDeduplicationAndCdnAdversarialTest {
         val winnerIndex = 42
 
         for (i in 0 until totalThreads) {
-            val q = if (i == winnerIndex) Qualities.P2160.value else Qualities.P720.value
-            val bitrate = if (i == winnerIndex) 20000L else 2000L
+            val q = if (i == winnerIndex) Qualities.P720.value else Qualities.P1080.value
+            val bitrate = if (i == winnerIndex) 5000L else 2000L
             val host = if (i % 2 == 0) "cdn1.example.com" else "edge-us-2.example.com"
 
             executor.submit {
@@ -479,6 +479,6 @@ class StreamDeduplicationAndCdnAdversarialTest {
         // Verify that regardless of race order, only 1 canonical entry remains in the deduplicator
         assertEquals("Canonical deduplication must collapse all 100 emissions into 1 entry", 1, deduplicator.getEmittedCount())
         val finalLink = deduplicator.getEmittedLinks().first()
-        assertEquals("Highest quality 4K stream must be the final retained entry", Qualities.P2160.value, finalLink.quality)
+        assertEquals("Highest priority 720p stream must be the final retained entry", Qualities.P720.value, finalLink.quality)
     }
 }

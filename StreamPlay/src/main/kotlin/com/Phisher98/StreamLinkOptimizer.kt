@@ -1674,26 +1674,30 @@ object StreamLinkOptimizer {
 
     /**
      * Determines whether candidate ExtractorLink is strictly superior to existing ExtractorLink:
-     * 1. Higher resolution quality
-     * 2. Top-tier source priority rank (VidLink > HexaSU > AutoEmbed > VidFast > VidEasy > Secondary)
-     * 3. Higher bitrate (kbps) (when resolutions and top-tier source ranks are equivalent)
-     * 4. Direct endpoint rewrites
-     * 5. Video source and HDR/codec score
-     * 6. Direct byte stream over HLS for equal tier sources
-     * 7. Audio format and channel score
-     * 8. Anti-throttling header completeness
+     * 1. Quality priority score (720p > 1080p > 480p > intermediate SD > 360p/240p > 1440p/4K > Unknown)
+     * 2. Top-tier source priority rank (VidLink > YFlix/HexaSU > CineJoy/AutoEmbed > VidFast > VidEasy > VidSrc > Secondary)
+     * 3. Genuine non-synthetic streams over synthetic companions
+     * 4. Higher bitrate (kbps) (when quality score and source rank are equivalent)
+     * 5. Direct endpoint rewrites (?download / &stream=1)
+     * 6. Video source and HDR/codec score (REMUX > BluRay > WEB-DL; DV > HDR10+ > HDR)
+     * 7. Direct byte stream over HLS for equal tier sources
+     * 8. Audio format and channel score (Atmos > TrueHD > DTS-HD > DTS > 7.1 > 5.1)
+     * 9. Anti-throttling header completeness
+     * 10. Intra-bucket resolution tiebreaker (e.g. 720p vs 718p widescreen when all other metrics are equal)
      */
     fun isBetterThan(candidate: ExtractorLink, current: ExtractorLink): Boolean {
-        // 1. Resolution Quality comparison: higher resolution strictly takes precedence for mirror deduplication
+        // 1. Resolution Quality comparison: user-priority score strictly takes precedence (720p > 1080p > 480p > SD > UHD > Unknown)
         val rawQ1 = if (candidate.quality > 0 && candidate.quality != Qualities.Unknown.value) candidate.quality else extractQualityFromText(candidate.name, candidate.url)
         val rawQ2 = if (current.quality > 0 && current.quality != Qualities.Unknown.value) current.quality else extractQualityFromText(current.name, current.url)
         val q1 = if (rawQ1 == Qualities.Unknown.value) 0 else rawQ1
         val q2 = if (rawQ2 == Qualities.Unknown.value) 0 else rawQ2
-        if (q1 != q2) {
-            return q1 > q2
+        val score1 = getQualityPriorityScore(q1)
+        val score2 = getQualityPriorityScore(q2)
+        if (score1 != score2) {
+            return score1 > score2
         }
 
-        // 2. Top-Tier Source Priority Rank (VidLink > HexaSU > AutoEmbed > VidFast > VidEasy > VidSrc > Secondary)
+        // 2. Top-Tier Source Priority Rank (VidLink > YFlix/HexaSU > CineJoy/AutoEmbed > VidFast > VidEasy > VidSrc > Secondary)
         // Strictly prevents lower-tier sources (e.g. VidFast, VidEasy, or scrapers) from overriding top-tier sources at equivalent resolution
         val sourceRank1 = getSourcePriorityRank(candidate)
         val sourceRank2 = getSourcePriorityRank(current)
@@ -1717,40 +1721,48 @@ object StreamLinkOptimizer {
         if (b1 != null && b2 == null) {
             return true
         }
+        if (b1 == null && b2 != null) {
+            return false
+        }
 
-        // 4. Direct endpoint score
+        // 5. Direct endpoint score
         val endpointScore1 = if (candidate.url.contains("?download") || candidate.url.contains("&stream=1")) 10 else 0
         val endpointScore2 = if (current.url.contains("?download") || current.url.contains("&stream=1")) 10 else 0
         if (endpointScore1 != endpointScore2) {
             return endpointScore1 > endpointScore2
         }
 
-        // 5. Video source & HDR score comparison
+        // 6. Video source & HDR score comparison
         val videoScore1 = calculateVideoScore(candidate)
         val videoScore2 = calculateVideoScore(current)
         if (videoScore1 != videoScore2) {
             return videoScore1 > videoScore2
         }
 
-        // 6. Direct byte stream over HLS for equal tier sources (Range request chunking for downloads)
+        // 7. Direct byte stream over HLS for equal tier sources (Range request chunking for downloads)
         val isDirect1 = candidate.type == ExtractorLinkType.VIDEO || candidate.url.endsWith(".mp4", ignoreCase = true)
         val isDirect2 = current.type == ExtractorLinkType.VIDEO || current.url.endsWith(".mp4", ignoreCase = true)
         if (isDirect1 != isDirect2) {
             return isDirect1
         }
 
-        // 7. Audio score comparison
+        // 8. Audio score comparison
         val audioScore1 = calculateAudioScore(candidate)
         val audioScore2 = calculateAudioScore(current)
         if (audioScore1 != audioScore2) {
             return audioScore1 > audioScore2
         }
 
-        // 8. Header score comparison
+        // 9. Header score comparison
         val hScore1 = calculateHeaderScore(candidate)
         val hScore2 = calculateHeaderScore(current)
         if (hScore1 != hScore2) {
             return hScore1 > hScore2
+        }
+
+        // 10. Intra-bucket resolution tiebreaker (e.g. 720p vs 718p widescreen when all other metrics are equal)
+        if (q1 != q2) {
+            return q1 > q2
         }
 
         return false
@@ -2210,7 +2222,12 @@ object StreamLinkOptimizer {
                     return
                 }
 
-                if (!hasEmittedTopStream && linkIs1080 && pending1080Links.isNotEmpty() && top720GraceMs > 0L && !top720GraceExpired) {
+                val shouldHoldInitial1080 = !hasEmittedTopStream && linkIs1080 && (
+                    pending1080Links.isNotEmpty() ||
+                    (isRankInFlight != null && hasHigherPendingTop720Rank(0) && top720GraceMs > 0L && !top720GraceExpired) ||
+                    (isRankInFlight == null && top720TimerJob?.isActive == true)
+                )
+                if (shouldHoldInitial1080) {
                     pending1080Links.add(link)
                     startTop720GraceTimer()
                     return
@@ -2272,8 +2289,12 @@ object StreamLinkOptimizer {
                                 } else {
                                     val bestStream = stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
                                     if (bestStream != null) {
-                                        val bestRank = getSourcePriorityRank(bestStream)
-                                        if (is1080p(bestStream) && hasHigherPendingTop720Rank(bestRank) && top720GraceMs > 0L && !top720GraceExpired) {
+                                        val shouldHold1080 = is1080p(bestStream) && (
+                                            pending1080Links.isNotEmpty() ||
+                                            (isRankInFlight != null && hasHigherPendingTop720Rank(0) && top720GraceMs > 0L && !top720GraceExpired) ||
+                                            (isRankInFlight == null && top720TimerJob?.isActive == true)
+                                        )
+                                        if (shouldHold1080) {
                                             stagedLinks.remove(bestStream)
                                             pending1080Links.add(bestStream)
                                             val other1080 = stagedLinks.filter { is1080p(it) }

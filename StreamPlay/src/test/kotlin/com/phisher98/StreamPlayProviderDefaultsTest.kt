@@ -5,6 +5,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class StreamPlayProviderDefaultsTest {
 
@@ -74,6 +78,106 @@ class StreamPlayProviderDefaultsTest {
             val tier = SpeculativePipeliner.STATIC_COLD_START_TIERS[topId]
             assertEquals("Top tier provider $topId must be LatencyTier.TIER_1", LatencyTier.TIER_1, tier)
         }
+    }
+
+    // ==================== v7 Migration Idempotency Stress Tests ====================
+
+    @Test
+    fun testV7MigrationCleanInstallActivatesExactlyTopTierIdempotently() {
+        val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
+
+        // 1. Initial clean install execution
+        val initialDisabled = getOrInitializeDisabledProviders(mockPrefs)
+        val allProviders = buildProviders()
+        val activeProviders = allProviders.map { it.id }.filterNot { initialDisabled.contains(it) }.toSet()
+
+        assertEquals("Clean install must activate exactly 6 top-tier providers", 6, activeProviders.size)
+        assertEquals(DEFAULT_TOP_TIER_PROVIDERS, activeProviders)
+        assertTrue("HexaSU must be in disabled set", initialDisabled.contains("HexaSU"))
+        assertTrue("autoembed must be in disabled set", initialDisabled.contains("autoembed"))
+        assertTrue(mockPrefs.getBoolean(PREFS_TOP_TIER_INITIALIZED, false))
+
+        // 2. Repeated invocation must be strictly idempotent
+        val secondDisabled = getOrInitializeDisabledProviders(mockPrefs)
+        assertEquals("Second call must return identical disabled set", initialDisabled, secondDisabled)
+
+        // 3. User custom modifications after migration must NOT be overwritten by subsequent calls
+        val userModified = secondDisabled + "yflix" // User disables yflix
+        mockPrefs.edit().putStringSet("disabled_providers", userModified).apply()
+
+        val thirdDisabled = getOrInitializeDisabledProviders(mockPrefs)
+        assertEquals("Subsequent calls must honor user preference and not re-initialize", userModified, thirdDisabled)
+        assertTrue(thirdDisabled.contains("yflix"))
+    }
+
+    @Test
+    fun testV7MigrationUpgradeFromV6PreservesOverridesAndIsIdempotent() {
+        val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
+
+        // Setup legacy v6 state: HexaSU & autoembed active, yflix & cinejoy disabled,
+        // with custom user overrides (user disabled vidlink, user enabled moviebox)
+        val v6Disabled = (getDefaultDisabledProviderIds() - setOf("HexaSU", "autoembed") + setOf("yflix", "cinejoy", "vidlink")) - "moviebox"
+        mockPrefs.edit()
+            .putStringSet("disabled_providers", v6Disabled)
+            .putBoolean("streamplay_top_tier_v6_initialized", true)
+            .apply()
+
+        // Run v7 migration
+        val migratedDisabled = getOrInitializeDisabledProviders(mockPrefs)
+
+        // Dead providers must be disabled
+        assertTrue("HexaSU must be disabled", migratedDisabled.contains("HexaSU"))
+        assertTrue("autoembed must be disabled", migratedDisabled.contains("autoembed"))
+        assertTrue("superstream must be disabled", migratedDisabled.contains("superstream"))
+        assertTrue("vaplayer must be disabled", migratedDisabled.contains("vaplayer"))
+
+        // Promoted SOTA providers must be enabled
+        assertFalse("yflix must be enabled", migratedDisabled.contains("yflix"))
+        assertFalse("cinejoy must be enabled", migratedDisabled.contains("cinejoy"))
+
+        // User overrides must be preserved
+        assertTrue("User custom disable of vidlink must be preserved", migratedDisabled.contains("vidlink"))
+        assertFalse("User custom enable of moviebox must be preserved", migratedDisabled.contains("moviebox"))
+
+        assertTrue(mockPrefs.getBoolean(PREFS_TOP_TIER_INITIALIZED, false))
+
+        // Idempotency: second call returns same set
+        val subsequent = getOrInitializeDisabledProviders(mockPrefs)
+        assertEquals("Subsequent call must be idempotent", migratedDisabled, subsequent)
+    }
+
+    @Test
+    fun testV7MigrationConcurrentInitializationIsThreadSafeAndIdempotent() {
+        val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
+        val threadCount = 20
+        val executor = Executors.newFixedThreadPool(threadCount)
+        val latch = CountDownLatch(threadCount)
+        val results = ConcurrentLinkedQueue<Set<String>>()
+
+        for (i in 0 until threadCount) {
+            executor.submit {
+                try {
+                    val res = getOrInitializeDisabledProviders(mockPrefs)
+                    results.add(res)
+                } finally {
+                    latch.countDown()
+                }
+            }
+        }
+
+        assertTrue("All threads must finish without deadlocks", latch.await(10, TimeUnit.SECONDS))
+        executor.shutdown()
+
+        assertEquals(threadCount, results.size)
+        val allProviders = buildProviders()
+        for (res in results) {
+            val active = allProviders.map { it.id }.filterNot { res.contains(it) }.toSet()
+            assertEquals("Every concurrent call must activate exactly 6 top-tier providers", DEFAULT_TOP_TIER_PROVIDERS, active)
+            for (top in DEFAULT_TOP_TIER_PROVIDERS) {
+                assertFalse("Top tier provider $top must not be disabled", res.contains(top))
+            }
+        }
+        assertTrue(mockPrefs.getBoolean(PREFS_TOP_TIER_INITIALIZED, false))
     }
 }
 
