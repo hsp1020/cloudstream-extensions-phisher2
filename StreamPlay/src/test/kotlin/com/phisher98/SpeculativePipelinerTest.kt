@@ -366,10 +366,10 @@ class SpeculativePipelinerTest {
     @Test
     fun testFiveTierPriorityInFlightPreservation() = runBlocking {
         val vidlinkFinished = AtomicBoolean(false)
-        val hexasuFinished = AtomicBoolean(false)
-        val autoembedFinished = AtomicBoolean(false)
+        val rivestreamFinished = AtomicBoolean(false)
         val vidfastFinished = AtomicBoolean(false)
-        val videasyCancelled = AtomicBoolean(false)
+        val videasyFinished = AtomicBoolean(false)
+        val autoembedCancelled = AtomicBoolean(false)
 
         val config = EarlySatisfactionConfig(
             minVerifiedLinks = 1,
@@ -387,30 +387,30 @@ class SpeculativePipelinerTest {
                 controller.onLinkEmitted(createLink("Vidlink [1080p]", Qualities.P1080.value))
                 vidlinkFinished.set(true)
             },
-            // HexaSU (90) takes 60ms
-            PipelinedTask("HexaSU", LatencyTier.TIER_0, isVideo = true, priorityBoost = 90f) {
+            // RiveStream (90) takes 60ms
+            PipelinedTask("rivestream", LatencyTier.TIER_0, isVideo = true, priorityBoost = 90f) {
                 delay(60)
-                controller.onLinkEmitted(createLink("HexaSU [1080p]", Qualities.P1080.value))
-                hexasuFinished.set(true)
+                controller.onLinkEmitted(createLink("RiveStream [1080p]", Qualities.P1080.value))
+                rivestreamFinished.set(true)
             },
-            // AutoEmbed (80) takes 40ms
-            PipelinedTask("autoembed", LatencyTier.TIER_0, isVideo = true, priorityBoost = 80f) {
+            // VidFast (85) takes 40ms
+            PipelinedTask("vidfast", LatencyTier.TIER_0, isVideo = true, priorityBoost = 85f) {
                 delay(40)
-                controller.onLinkEmitted(createLink("AutoEmbed [1080p]", Qualities.P1080.value))
-                autoembedFinished.set(true)
-            },
-            // VidFast (70) finishes early at 10ms
-            PipelinedTask("vidfast", LatencyTier.TIER_0, isVideo = true, priorityBoost = 70f) {
-                delay(10)
                 controller.onLinkEmitted(createLink("VidFast [1080p]", Qualities.P1080.value))
                 vidfastFinished.set(true)
             },
-            // VidEasy (60) takes 120ms and should be cancelled by VidFast
-            PipelinedTask("VidEasy", LatencyTier.TIER_0, isVideo = true, priorityBoost = 60f) {
+            // VidEasy (80) finishes early at 10ms
+            PipelinedTask("VidEasy", LatencyTier.TIER_0, isVideo = true, priorityBoost = 80f) {
+                delay(10)
+                controller.onLinkEmitted(createLink("VidEasy [1080p]", Qualities.P1080.value))
+                videasyFinished.set(true)
+            },
+            // AutoEmbed (40 <= 80) takes 120ms and should be cancelled by VidEasy
+            PipelinedTask("autoembed", LatencyTier.TIER_0, isVideo = true, priorityBoost = 40f) {
                 try {
                     delay(120)
                 } catch (e: kotlinx.coroutines.CancellationException) {
-                    videasyCancelled.set(true)
+                    autoembedCancelled.set(true)
                     throw e
                 }
             }
@@ -423,19 +423,19 @@ class SpeculativePipelinerTest {
         )
 
         assertTrue("Pipeline must succeed", result)
-        assertTrue("VidFast must finish", vidfastFinished.get())
-        assertTrue("AutoEmbed must NOT be aborted by VidFast and must finish", autoembedFinished.get())
-        assertTrue("HexaSU must NOT be aborted by VidFast and must finish", hexasuFinished.get())
-        assertTrue("VidLink must NOT be aborted by VidFast and must finish", vidlinkFinished.get())
-        assertTrue("VidEasy (priority 60 <= 70) must be cancelled", videasyCancelled.get())
+        assertTrue("VidEasy must finish", videasyFinished.get())
+        assertTrue("VidFast must NOT be aborted by VidEasy and must finish", vidfastFinished.get())
+        assertTrue("RiveStream must NOT be aborted by VidEasy and must finish", rivestreamFinished.get())
+        assertTrue("VidLink must NOT be aborted by VidEasy and must finish", vidlinkFinished.get())
+        assertTrue("AutoEmbed (priority 40 <= 80) must be cancelled", autoembedCancelled.get())
     }
 
     @Test
     fun testInFlightHigherPriorityTaskGrantedExtendedGraceBeyondNormalGracePeriod() = runBlocking {
+        val videasyFinished = AtomicBoolean(false)
         val vidfastFinished = AtomicBoolean(false)
-        val autoembedFinished = AtomicBoolean(false)
-        val hexasuFinished = AtomicBoolean(false)
-        val videasyCancelled = AtomicBoolean(false)
+        val rivestreamFinished = AtomicBoolean(false)
+        val autoembedCancelled = AtomicBoolean(false)
 
         val config = EarlySatisfactionConfig(
             minVerifiedLinks = 1,
@@ -448,30 +448,30 @@ class SpeculativePipelinerTest {
         val controller = EarlySatisfactionController(config)
 
         val tasks = listOf(
-            // HexaSU (90) takes 100ms (> 40ms normal grace)
-            PipelinedTask("HexaSU", LatencyTier.TIER_0, isVideo = true, priorityBoost = 90f) {
+            // RiveStream (90) takes 100ms (> 40ms normal grace)
+            PipelinedTask("rivestream", LatencyTier.TIER_0, isVideo = true, priorityBoost = 90f) {
                 delay(100)
-                controller.onLinkEmitted(createLink("HexaSU [1080p]", Qualities.P1080.value))
-                hexasuFinished.set(true)
+                controller.onLinkEmitted(createLink("RiveStream [1080p]", Qualities.P1080.value))
+                rivestreamFinished.set(true)
             },
-            // AutoEmbed (80) takes 70ms (> 40ms normal grace)
-            PipelinedTask("autoembed", LatencyTier.TIER_0, isVideo = true, priorityBoost = 80f) {
+            // VidFast (85) takes 70ms (> 40ms normal grace)
+            PipelinedTask("vidfast", LatencyTier.TIER_0, isVideo = true, priorityBoost = 85f) {
                 delay(70)
-                controller.onLinkEmitted(createLink("AutoEmbed [1080p]", Qualities.P1080.value))
-                autoembedFinished.set(true)
-            },
-            // VidFast (70) finishes early at 10ms and satisfies early
-            PipelinedTask("vidfast", LatencyTier.TIER_0, isVideo = true, priorityBoost = 70f) {
-                delay(10)
                 controller.onLinkEmitted(createLink("VidFast [1080p]", Qualities.P1080.value))
                 vidfastFinished.set(true)
             },
-            // VidEasy (60 <= 70) should be cancelled immediately upon VidFast satisfaction
-            PipelinedTask("VidEasy", LatencyTier.TIER_0, isVideo = true, priorityBoost = 60f) {
+            // VidEasy (80) finishes early at 10ms and satisfies early
+            PipelinedTask("VidEasy", LatencyTier.TIER_0, isVideo = true, priorityBoost = 80f) {
+                delay(10)
+                controller.onLinkEmitted(createLink("VidEasy [1080p]", Qualities.P1080.value))
+                videasyFinished.set(true)
+            },
+            // AutoEmbed (40 <= 80) should be cancelled immediately upon VidEasy satisfaction
+            PipelinedTask("autoembed", LatencyTier.TIER_0, isVideo = true, priorityBoost = 40f) {
                 try {
                     delay(200)
                 } catch (e: kotlinx.coroutines.CancellationException) {
-                    videasyCancelled.set(true)
+                    autoembedCancelled.set(true)
                     throw e
                 }
             }
@@ -484,9 +484,9 @@ class SpeculativePipelinerTest {
         )
 
         assertTrue("Pipeline execution should return true", result)
-        assertTrue("VidFast must finish", vidfastFinished.get())
-        assertTrue("AutoEmbed must be granted extended grace and finish despite exceeding normal grace", autoembedFinished.get())
-        assertTrue("HexaSU must be granted extended grace and finish despite exceeding normal grace", hexasuFinished.get())
-        assertTrue("VidEasy (priority 60 <= 70) must be cancelled", videasyCancelled.get())
+        assertTrue("VidEasy must finish", videasyFinished.get())
+        assertTrue("VidFast must be granted extended grace and finish despite exceeding normal grace", vidfastFinished.get())
+        assertTrue("RiveStream must be granted extended grace and finish despite exceeding normal grace", rivestreamFinished.get())
+        assertTrue("AutoEmbed (priority 40 <= 80) must be cancelled", autoembedCancelled.get())
     }
 }

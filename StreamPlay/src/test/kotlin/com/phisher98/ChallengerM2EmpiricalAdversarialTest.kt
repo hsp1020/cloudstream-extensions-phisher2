@@ -312,22 +312,22 @@ class ChallengerM2EmpiricalAdversarialTest {
 
         dispatcher.onSubtitleReceived()
 
-        val vidcore720 = createLink("Vidcore", "Vidcore [720p]", "https://vidcore.io/720.m3u8", Qualities.P720.value)
+        val vidup720 = createLink("Vidup", "Vidup [720p]", "https://vidup.io/720.m3u8", Qualities.P720.value)
         val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
         val rivestream1080 = createLink("RiveStream", "RiveStream [1080p]", "https://rivestream.live/1080.m3u8", Qualities.P1080.value)
         val cinejoy480 = createLink("CineJoy", "CineJoy [480p]", "https://cinejoy.to/480.m3u8", Qualities.P480.value)
 
         // Lower-tier 720p arrives first -> staged waiting for pinnacle VidLink (rank 100)
-        dispatcher.onLinkAccepted(vidcore720)
-        assertTrue("Vidcore 720p staged waiting for top source grace period", dispatched.isEmpty())
+        dispatcher.onLinkAccepted(vidup720)
+        assertTrue("Vidup 720p staged waiting for top source grace period", dispatched.isEmpty())
 
         // Pinnacle VidLink 720p arrives within grace period -> dispatched as #1 immediately!
         delay(20)
         dispatcher.onLinkAccepted(vidlink720)
-        // VidLink 720p is emitted as #1, unblocking staged Vidcore 720p as #2
+        // VidLink 720p is emitted as #1, unblocking staged Vidup 720p as #2
         assertEquals("Both 720p streams must be emitted in rank priority order", 2, dispatched.size)
         assertEquals("VidLink 720p (rank 100) must be first", vidlink720, dispatched[0])
-        assertEquals("Vidcore 720p (rank 95) must be second", vidcore720, dispatched[1])
+        assertEquals("Vidup 720p (rank 95) must be second", vidup720, dispatched[1])
 
         // 480p arrives before 1080p -> staged waiting for 1080p
         dispatcher.onLinkAccepted(cinejoy480)

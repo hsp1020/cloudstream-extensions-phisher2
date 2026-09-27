@@ -22,17 +22,21 @@ class StreamPlayProviderDefaultsTest {
         val superstream = providers.find { it.id.equals("superstream", ignoreCase = true) || it.name.equals("SuperStream", ignoreCase = true) }
         assertNull("SuperStream must be completely removed from providers list", superstream)
         assertFalse("SuperStream id must not be in default top tier providers", DEFAULT_TOP_TIER_PROVIDERS.contains("superstream"))
+
+        val vidcore = providers.find { it.id.equals("vidcore", ignoreCase = true) || it.name.equals("Vidcore", ignoreCase = true) }
+        assertNull("Vidcore must be completely removed from providers list", vidcore)
+        assertFalse("Vidcore id must not be in default top tier providers", DEFAULT_TOP_TIER_PROVIDERS.contains("vidcore"))
     }
 
     @Test
     fun testDefaultTopTierProvidersContainsExpectedSources() {
         val expected = setOf(
             "vidlink",
-            "vidcore",
             "vidup",
-            "rivestream",
             "cinejoy",
-            "VidEasy"
+            "HexaSU",
+            "autoembed",
+            "moviebox"
         )
         assertEquals("Top tier default providers must contain exactly 6 sources", 6, DEFAULT_TOP_TIER_PROVIDERS.size)
         assertEquals("Top tier default providers must match expected IDs", expected, DEFAULT_TOP_TIER_PROVIDERS)
@@ -80,10 +84,10 @@ class StreamPlayProviderDefaultsTest {
         }
     }
 
-    // ==================== v11 Migration Idempotency Stress Tests ====================
+    // ==================== v12 Migration Idempotency Stress Tests ====================
 
     @Test
-    fun testV11MigrationCleanInstallActivatesExactlyTopTierIdempotently() {
+    fun testV12MigrationCleanInstallActivatesExactlyTopTierIdempotently() {
         val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
 
         // 1. Initial clean install execution
@@ -93,10 +97,13 @@ class StreamPlayProviderDefaultsTest {
 
         assertEquals("Clean install must activate exactly 6 top-tier providers", 6, activeProviders.size)
         assertEquals(DEFAULT_TOP_TIER_PROVIDERS, activeProviders)
-        assertTrue("HexaSU must be in disabled set", initialDisabled.contains("HexaSU"))
-        assertTrue("autoembed must be in disabled set", initialDisabled.contains("autoembed"))
+        assertFalse("HexaSU must NOT be in disabled set", initialDisabled.contains("HexaSU"))
+        assertFalse("autoembed must NOT be in disabled set", initialDisabled.contains("autoembed"))
+        assertFalse("moviebox must NOT be in disabled set", initialDisabled.contains("moviebox"))
+        assertTrue("vidcore must be in disabled set", initialDisabled.contains("vidcore"))
         assertTrue("vidfast must be in disabled set", initialDisabled.contains("vidfast"))
-        assertFalse("VidEasy must NOT be in disabled set", initialDisabled.contains("VidEasy"))
+        assertTrue("VidEasy must be in disabled set", initialDisabled.contains("VidEasy"))
+        assertTrue("rivestream must be in disabled set", initialDisabled.contains("rivestream"))
         assertTrue("yflix must be in disabled set", initialDisabled.contains("yflix"))
         assertTrue("vidsrc must be in disabled set", initialDisabled.contains("vidsrc"))
         assertFalse("cinejoy must NOT be in disabled set", initialDisabled.contains("cinejoy"))
@@ -116,38 +123,38 @@ class StreamPlayProviderDefaultsTest {
     }
 
     @Test
-    fun testV11MigrationUpgradeFromV10PreservesOverridesAndIsIdempotent() {
+    fun testV12MigrationUpgradeFromV11PreservesOverridesAndIsIdempotent() {
         val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
 
-        // Setup legacy state with custom user overrides (user disabled vidlink, user enabled moviebox)
-        val v10Disabled = (getDefaultDisabledProviderIds() + setOf("vidlink")) - "moviebox"
+        // Setup legacy state with custom user overrides (user disabled vidlink, user enabled yflix)
+        val v11Disabled = (getDefaultDisabledProviderIds() + setOf("vidlink")) - "yflix"
         mockPrefs.edit()
-            .putStringSet("disabled_providers", v10Disabled)
-            .putBoolean("streamplay_top_tier_v10_initialized", true)
+            .putStringSet("disabled_providers", v11Disabled)
+            .putBoolean("streamplay_top_tier_v11_initialized", true)
             .apply()
 
-        // Run v11 migration
+        // Run v14 migration
         val migratedDisabled = getOrInitializeDisabledProviders(mockPrefs)
 
-        // Dead providers must be disabled (including vidfast, vidsrc)
-        assertTrue("HexaSU must be disabled", migratedDisabled.contains("HexaSU"))
-        assertTrue("autoembed must be disabled", migratedDisabled.contains("autoembed"))
+        // Dead providers must be disabled (including vidcore, vidsrc, rivestream, vidfast, VidEasy)
+        assertTrue("vidfast must be disabled", migratedDisabled.contains("vidfast"))
+        assertTrue("VidEasy must be disabled", migratedDisabled.contains("VidEasy"))
+        assertTrue("rivestream must be disabled", migratedDisabled.contains("rivestream"))
         assertTrue("superstream must be disabled", migratedDisabled.contains("superstream"))
         assertTrue("vaplayer must be disabled", migratedDisabled.contains("vaplayer"))
-        assertTrue("vidfast must be disabled", migratedDisabled.contains("vidfast"))
-        assertFalse("VidEasy must be enabled", migratedDisabled.contains("VidEasy"))
-        assertTrue("yflix must be disabled", migratedDisabled.contains("yflix"))
+        assertTrue("vidcore must be disabled", migratedDisabled.contains("vidcore"))
         assertTrue("vidsrc must be disabled", migratedDisabled.contains("vidsrc"))
         assertFalse("cinejoy must be enabled", migratedDisabled.contains("cinejoy"))
 
         // Promoted SOTA providers must be enabled
-        assertFalse("vidcore must be enabled", migratedDisabled.contains("vidcore"))
+        assertFalse("HexaSU must be enabled", migratedDisabled.contains("HexaSU"))
+        assertFalse("autoembed must be enabled", migratedDisabled.contains("autoembed"))
+        assertFalse("moviebox must be enabled", migratedDisabled.contains("moviebox"))
         assertFalse("vidup must be enabled", migratedDisabled.contains("vidup"))
-        assertFalse("rivestream must be enabled", migratedDisabled.contains("rivestream"))
 
         // User overrides must be preserved
         assertTrue("User custom disable of vidlink must be preserved", migratedDisabled.contains("vidlink"))
-        assertFalse("User custom enable of moviebox must be preserved", migratedDisabled.contains("moviebox"))
+        assertFalse("User custom enable of yflix must be preserved", migratedDisabled.contains("yflix"))
 
         assertTrue(mockPrefs.getBoolean(PREFS_TOP_TIER_INITIALIZED, false))
 

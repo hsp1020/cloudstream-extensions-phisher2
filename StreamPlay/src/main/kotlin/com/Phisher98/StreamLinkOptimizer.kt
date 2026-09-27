@@ -476,6 +476,7 @@ object StreamLinkOptimizer {
             lowerUrl.contains("cinejoy.pk") ||
             lowerUrl.contains("solarpanelcleaning") ||
             lowerUrl.contains("api.wing.st") ||
+            lowerUrl.contains("bright67.online") ||
             referer?.contains("cinejoy.to", ignoreCase = true) == true ||
             referer?.contains("cinejoy.pk", ignoreCase = true) == true
         val isHexa = source?.contains("hexa", ignoreCase = true) == true ||
@@ -533,6 +534,7 @@ object StreamLinkOptimizer {
                 }
                 headers[HEADER_USER_AGENT] = "com.community.oneroom/50020115 (Linux; U; Android 15; en_US; OPPO CPH2579; Build/AP3A.240905.015.A2; Cronet/140.0.7339.51)"
                 headers[HEADER_ACCEPT] = "*/*"
+                headers["Accept-Ranges"] = "bytes"
             }
             STREAMTAPE_HOST_REGEX.containsMatchIn(lowerUrl) -> {
                 headers[HEADER_REFERER] = "https://streamtape.com/"
@@ -644,11 +646,11 @@ object StreamLinkOptimizer {
                 headers[HEADER_REFERER] = "https://vidup.to/"
                 headers[HEADER_ORIGIN] = "https://vidup.to"
             }
-            lowerUrl.contains("solarpanelcleaning") || referer?.contains("solarpanelcleaning") == true || isCineJoy -> {
+            lowerUrl.contains("solarpanelcleaning") || referer?.contains("solarpanelcleaning") == true -> {
                 headers[HEADER_REFERER] = "https://solarpanelcleaning.cc/"
                 headers[HEADER_ORIGIN] = "https://solarpanelcleaning.cc"
             }
-            lowerUrl.contains("cinejoy.pk") || lowerUrl.contains("cinejoy.to") -> {
+            lowerUrl.contains("cinejoy.pk") || lowerUrl.contains("cinejoy.to") || lowerUrl.contains("bright67.online") || isCineJoy -> {
                 headers[HEADER_REFERER] = "https://cinejoy.pk/"
                 headers[HEADER_ORIGIN] = "https://cinejoy.pk"
             }
@@ -774,7 +776,7 @@ object StreamLinkOptimizer {
             }
         }
 
-        if (linkType == ExtractorLinkType.VIDEO && !isVidlink) {
+        if (linkType == ExtractorLinkType.VIDEO) {
             if (!headers.keys.any { it.equals("Accept-Ranges", ignoreCase = true) }) {
                 headers["Accept-Ranges"] = "bytes"
             }
@@ -837,6 +839,7 @@ object StreamLinkOptimizer {
             lowerUrl.contains("cinejoy.pk") ||
             lowerUrl.contains("solarpanelcleaning") ||
             lowerUrl.contains("api.wing.st") ||
+            lowerUrl.contains("bright67.online") ||
             referer?.contains("cinejoy.to", ignoreCase = true) == true ||
             referer?.contains("cinejoy.pk", ignoreCase = true) == true
         val isHexa = source?.contains("hexa", ignoreCase = true) == true ||
@@ -911,8 +914,8 @@ object StreamLinkOptimizer {
             lowerUrl.contains("yflix.to") || isYFlix -> "https://yflix.to/"
             lowerUrl.contains("vidcore.io") || isVidcore -> "https://vidcore.io/"
             lowerUrl.contains("vidup.to") || isVidup -> "https://vidup.to/"
-            lowerUrl.contains("solarpanelcleaning") || referer?.contains("solarpanelcleaning") == true || isCineJoy -> "https://solarpanelcleaning.cc/"
-            lowerUrl.contains("cinejoy.pk") || lowerUrl.contains("cinejoy.to") -> "https://cinejoy.pk/"
+            lowerUrl.contains("solarpanelcleaning") || referer?.contains("solarpanelcleaning") == true -> "https://solarpanelcleaning.cc/"
+            lowerUrl.contains("cinejoy.pk") || lowerUrl.contains("cinejoy.to") || lowerUrl.contains("bright67.online") || isCineJoy -> "https://cinejoy.pk/"
             lowerUrl.contains("embed.su") || lowerUrl.contains("hexa.su") || lowerUrl.contains("flixer.su") || isHexa -> {
                 when {
                     lowerUrl.contains("embed.su") || referer?.contains("embed.su") == true ||
@@ -1436,9 +1439,9 @@ object StreamLinkOptimizer {
 
     /**
      * Checks if a stream link belongs to one of the top-tier zero-setup primary sources
-     * (VidLink 100 > HexaSU 90 > AutoEmbed 80 > VidFast 70 > VidEasy 60 > VidSrc 55).
+     * (VidLink 100 > Vidup 95 > RiveStream 90 > CineJoy 88 > VidFast 85 > VidEasy 80).
      */
-    fun isTopTierSource(link: ExtractorLink): Boolean = getSourcePriorityRank(link) >= 70
+    fun isTopTierSource(link: ExtractorLink): Boolean = getSourcePriorityRank(link) >= 55
 
     /**
      * Checks if a provider ID matches one of the top-tier primary sources.
@@ -1446,12 +1449,11 @@ object StreamLinkOptimizer {
     fun isTopTierProvider(providerId: String): Boolean {
         val p = providerId.lowercase(Locale.ROOT)
         return p.contains("vidlink") ||
-            p.contains("vidcore") ||
             p.contains("vidup") ||
-            p.contains("rivestream") ||
             p.contains("cinejoy") ||
-            p.contains("peachify") ||
-            p.contains("videasy")
+            p.contains("hexasu") || p.contains("hexa") || p.contains("embedsu") || p.contains("flixer") ||
+            p.contains("autoembed") ||
+            p.contains("moviebox")
     }
 
     /**
@@ -1813,15 +1815,21 @@ object StreamLinkOptimizer {
     /**
      * Definitive top-tier zero-setup source priority ranking:
      * 1. VidLink (api.vidlink.pro fast HLS/m3u8 & direct Cronet CDN streams) -> 100
-     * 2. HexaSU / embed.su (multi-cluster HLS resolver) -> 90
-     * 3. AutoEmbed (player.autoembed.cc high reliability HLS/MP4 streams) -> 80
-     * 4. VidFast (vidfast.vc stream resolver) -> 70
-     * 5. VidEasy (api.videasy.net multi-server resolver) -> 60
+     * 2. Vidup (vidup.to fast HLS streams) -> 95
+     * 3. RiveStream (www.rivestream.app multi-server fast HLS) -> 90
+     * 4. CineJoy (api.wing.st / solarpanelcleaning multi-server) -> 88
+     * 5. VidFast (vidfast.vc / hypergate fast multi-server HLS) -> 85
+     * 6. VidEasy (api.speedracelight.com / videasy.to multi-server) -> 80
      * Secondary scrapers:
-     * 6. MovieBox (strict fallback) -> 50
-     * 7. RiveStream (strict fallback) -> 40
-     * 8. Vidrock (strict fallback) -> 30
-     * 9. MoviesAPI (strict fallback) -> 20
+     * 7. Peachify (peachify resolver) -> 50
+     * 8. YFlix / HexaSU (moviesflix / embed.su) -> 45
+     * 9. AutoEmbed (player.autoembed.cc HLS/MP4 streams) -> 40
+     * 10. MovieBox / UHDMovies / 4kHdhub / MultiMovies -> 35
+     * 11. VidSrc (Unified) -> 25
+     * 12. Vidrock -> 20
+     * 13. MoviesAPI -> 15
+     * 14. Vidzee -> 12
+     * 15. 2Embed -> 10
      */
     fun getSourcePriorityRank(link: ExtractorLink): Int {
         val s = link.source.lowercase(Locale.ROOT)
@@ -1829,25 +1837,23 @@ object StreamLinkOptimizer {
         val u = link.url.lowercase(Locale.ROOT)
         return when {
             s.contains("vidlink") || n.contains("vidlink") || u.contains("vidlink.pro") || u.contains("hakunaymatata") -> 100
-            (s.contains("vidcore") || n.contains("vidcore") || u.contains("vidcore.io") ||
-                (u.contains("quietridge.top") && !s.contains("vidup") && !n.contains("vidup"))) -> 95
-            s.contains("vidup") || n.contains("vidup") || u.contains("vidup.to") || u.contains("keenanchor.top") -> 92
-            s.contains("rivestream") || n.contains("rivestream") || u.contains("rivestream") -> 90
-            s.contains("cinejoy") || n.contains("cinejoy") || u.contains("cinejoy") || u.contains("solarpanelcleaning") || u.contains("api.wing.st") -> 88
-            s.contains("peachify") || n.contains("peachify") || u.contains("peachify") -> 80
-            s.contains("videasy") || n.contains("videasy") || u.contains("videasy") || u.contains("speedracelight.com") || u.contains("videasy.to") || u.contains("videasy.net") || u.contains("cineby.sc") ||
-                (u.contains("peakstorm.top") && (s.contains("videasy") || n.contains("videasy"))) -> 70
-            s.contains("yflix") || s.contains("moviesflix") || n.contains("yflix") || n.contains("moviesflix") || u.contains("yflix") || u.contains("moviesflix") ||
-                s.contains("hexasu") || s.contains("hexa.su") || s.contains("embedsu") || s.contains("embed.su") || s.contains("hexa") || s.contains("flixer") ||
+            s.contains("vidup") || n.contains("vidup") || u.contains("vidup.to") || u.contains("keenanchor.top") -> 95
+            s.contains("cinejoy") || n.contains("cinejoy") || u.contains("cinejoy") || u.contains("solarpanelcleaning") || u.contains("api.wing.st") || u.contains("bright67.online") -> 90
+            s.contains("hexasu") || s.contains("hexa.su") || s.contains("embedsu") || s.contains("embed.su") || s.contains("hexa") || s.contains("flixer") ||
                 n.contains("hexasu") || n.contains("embedsu") || n.contains("embed.su") || n.contains("hexa") || n.contains("flixer") ||
-                u.contains("hexa.su") || u.contains("embed.su") || u.contains("flixer.su") || u.contains("flixer") -> 45
-            s.contains("autoembed") || n.contains("autoembed") || u.contains("autoembed.cc") || u.contains("player.autoembed.cc") || u.contains("autoembed.to") || u.contains("autoembed.co") -> 40
-            s.contains("moviebox") || n.contains("moviebox") || u.contains("moviebox") -> 35
+                u.contains("hexa.su") || u.contains("embed.su") || u.contains("flixer.su") || u.contains("flixer") -> 88
+            s.contains("autoembed") || n.contains("autoembed") || u.contains("autoembed.cc") || u.contains("player.autoembed.cc") || u.contains("autoembed.to") || u.contains("autoembed.co") -> 85
+            s.contains("moviebox") || n.contains("moviebox") || u.contains("moviebox") -> 80
+            s.contains("yflix") || s.contains("moviesflix") || n.contains("yflix") || n.contains("moviesflix") || u.contains("yflix") || u.contains("moviesflix") -> 75
+            s.contains("rivestream") || n.contains("rivestream") || u.contains("rivestream") -> 70
+            s.contains("vidfast") || n.contains("vidfast") || u.contains("vidfast.pro") || u.contains("vidfast.vc") ||
+                ((u.contains("peakstorm.top") || u.contains("hypergate.top")) && !s.contains("videasy") && !n.contains("videasy")) -> 65
+            s.contains("videasy") || n.contains("videasy") || u.contains("videasy") || u.contains("speedracelight.com") || u.contains("videasy.to") || u.contains("videasy.net") || u.contains("cineby.sc") ||
+                (u.contains("peakstorm.top") && (s.contains("videasy") || n.contains("videasy"))) -> 60
+            s.contains("peachify") || n.contains("peachify") || u.contains("peachify") -> 50
             s.contains("4khdhub") || n.contains("4khdhub") || u.contains("4khdhub") -> 35
             s.contains("multimovies") || n.contains("multimovies") || u.contains("multimovies") -> 35
             s.contains("uhdmovies") || n.contains("uhdmovies") || u.contains("uhdmovies") -> 35
-            s.contains("vidfast") || n.contains("vidfast") || u.contains("vidfast.pro") || u.contains("vidfast.vc") ||
-                ((u.contains("peakstorm.top") || u.contains("hypergate.top")) && !s.contains("videasy") && !n.contains("videasy")) -> 30
             s.contains("vidsrc") || n.contains("vidsrc") || u.contains("vidsrc") || u.contains("cloudnestra") || u.contains("shadowlandschronicles") ||
                 u.contains("thepixelpioneer") || u.contains("putgate") || u.contains("whisperingpines") || u.contains("vidsrc.in") || u.contains("vidsrc.pm") || u.contains("vidsrc.net") -> 25
             s.contains("vidrock") || n.contains("vidrock") || u.contains("vidrock") -> 20
@@ -2285,25 +2291,11 @@ object StreamLinkOptimizer {
                 stagedLinks.add(link)
 
                 // If 720p link arrived and subtitles are ready
-                if (linkIs720 && linkIsTopTier && hasSubtitles) {
-                    val best720p = (stagedLinks.filter { is720p(it) && isTopTierSource(it) } + listOf(link))
+                if (linkIs720 && hasSubtitles) {
+                    val best720p = stagedLinks.filter { is720p(it) }
                         .sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull() ?: link
-                    val rank = getSourcePriorityRank(best720p)
-                    val maxRank = activeTopRanks?.maxOrNull() ?: 100
-                    if (rank >= maxRank || !hasHigherPendingTop720Rank(rank) || topSourceGraceMs <= 0L || topSourceGraceExpired) {
-                        // Pinnacle active source rank + 720p + subtitles -> dispatch IMMEDIATELY as #1!
-                        stageTimerJob?.cancel()
-                        stageTimerJob = null
-                        stagedLinks.remove(best720p)
-                        emitTopStreamAndAdvance(best720p)
-                        return
-                    } else {
-                        // Subtitles ready with 720p, but from lower tier: stage in pendingTop720Links
-                        stagedLinks.remove(best720p)
-                        pendingTop720Links.add(best720p)
-                        startTopSourceGraceTimer()
-                        return
-                    }
+                    dispatchOrStageBest(best720p)
+                    return
                 }
 
                 // If 720p arrived without subtitles yet, start short subtitle grace timer
@@ -2312,11 +2304,26 @@ object StreamLinkOptimizer {
                         stageTimerJob = scope.launch {
                             delay(subtitleGraceMs)
                             synchronized(lock) {
+                                stageTimerJob = null
                                 if (!hasEmittedTopStream) {
                                     val best720p = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
                                         ?: stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
                                     if (best720p != null) {
-                                        emitTopStreamAndAdvance(best720p)
+                                        val rank = getSourcePriorityRank(best720p)
+                                        val maxRank = activeTopRanks?.maxOrNull() ?: 100
+                                        val shouldHoldForHigherInFlight = isRankInFlight != null &&
+                                            rank < maxRank &&
+                                            hasHigherPendingTop720Rank(rank) &&
+                                            topSourceGraceMs > 0L &&
+                                            !topSourceGraceExpired
+                                        if (shouldHoldForHigherInFlight) {
+                                            stagedLinks.remove(best720p)
+                                            pendingTop720Links.add(best720p)
+                                            startTopSourceGraceTimer()
+                                        } else {
+                                            stagedLinks.remove(best720p)
+                                            emitTopStreamAndAdvance(best720p)
+                                        }
                                     }
                                 }
                             }
@@ -2334,24 +2341,44 @@ object StreamLinkOptimizer {
                             if (!hasEmittedTopStream) {
                                 val best720 = stagedLinks.filter { is720p(it) }.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
                                 if (best720 != null) {
-                                    emitTopStreamAndAdvance(best720)
+                                    dispatchOrStageBest(best720)
                                 } else {
                                     val bestStream = stagedLinks.sortedWith(STREAM_PRIORITY_COMPARATOR).firstOrNull()
                                     if (bestStream != null) {
-                                        val shouldHold1080 = is1080p(bestStream) && (
-                                            pending1080Links.isNotEmpty() ||
-                                            (isRankInFlight != null && hasHigherPendingTop720Rank(0) && top720GraceMs > 0L && !top720GraceExpired) ||
-                                            (isRankInFlight == null && top720TimerJob?.isActive == true)
-                                        )
-                                        if (shouldHold1080) {
-                                            stagedLinks.remove(bestStream)
-                                            pending1080Links.add(bestStream)
-                                            val other1080 = stagedLinks.filter { is1080p(it) }
-                                            stagedLinks.removeAll(other1080)
-                                            pending1080Links.addAll(other1080)
-                                            startTop720GraceTimer()
+                                        val rank = getSourcePriorityRank(bestStream)
+                                        val maxRank = activeTopRanks?.maxOrNull() ?: 100
+                                        val hasHigherRankInFlight = rank < maxRank && hasHigherPendingTop720Rank(rank) && topSourceGraceMs > 0L && !topSourceGraceExpired
+                                        if (hasHigherRankInFlight) {
+                                            if (is1080p(bestStream)) {
+                                                stagedLinks.remove(bestStream)
+                                                pending1080Links.add(bestStream)
+                                                startTop720GraceTimer()
+                                            } else if (isBelow720p(bestStream)) {
+                                                stagedLinks.remove(bestStream)
+                                                pendingBelowFhdLinks.add(bestStream)
+                                                startTopSourceGraceTimer()
+                                            } else {
+                                                stagedLinks.remove(bestStream)
+                                                pendingAbove1080Links.add(bestStream)
+                                                startTopSourceGraceTimer()
+                                            }
                                         } else {
-                                            emitTopStreamAndAdvance(bestStream)
+                                            val shouldHold1080 = is1080p(bestStream) && (
+                                                pending1080Links.isNotEmpty() ||
+                                                (isRankInFlight != null && hasHigherPendingTop720Rank(0) && top720GraceMs > 0L && !top720GraceExpired) ||
+                                                (isRankInFlight == null && top720TimerJob?.isActive == true)
+                                            )
+                                            if (shouldHold1080) {
+                                                stagedLinks.remove(bestStream)
+                                                pending1080Links.add(bestStream)
+                                                val other1080 = stagedLinks.filter { is1080p(it) }
+                                                stagedLinks.removeAll(other1080)
+                                                pending1080Links.addAll(other1080)
+                                                startTop720GraceTimer()
+                                            } else {
+                                                stagedLinks.remove(bestStream)
+                                                emitTopStreamAndAdvance(bestStream)
+                                            }
                                         }
                                     }
                                 }
@@ -2405,17 +2432,16 @@ object StreamLinkOptimizer {
         fun markProviderCompleted(providerId: String) {
             val rank = when {
                 providerId.contains("vidlink", ignoreCase = true) -> 100
-                providerId.contains("vidcore", ignoreCase = true) -> 95
-                providerId.contains("vidup", ignoreCase = true) -> 92
-                providerId.contains("rivestream", ignoreCase = true) -> 90
-                providerId.contains("cinejoy", ignoreCase = true) -> 88
-                providerId.contains("peachify", ignoreCase = true) -> 80
-                providerId.contains("videasy", ignoreCase = true) -> 70
-                providerId.contains("yflix", ignoreCase = true) || providerId.contains("moviesflix", ignoreCase = true) -> 45
-                providerId.contains("hexa", ignoreCase = true) -> 45
-                providerId.contains("autoembed", ignoreCase = true) -> 40
-                providerId.contains("moviebox", ignoreCase = true) -> 35
-                providerId.contains("vidfast", ignoreCase = true) -> 30
+                providerId.contains("vidup", ignoreCase = true) -> 95
+                providerId.contains("cinejoy", ignoreCase = true) -> 90
+                providerId.contains("hexa", ignoreCase = true) || providerId.contains("flixer", ignoreCase = true) || providerId.contains("embedsu", ignoreCase = true) -> 88
+                providerId.contains("autoembed", ignoreCase = true) -> 85
+                providerId.contains("moviebox", ignoreCase = true) -> 80
+                providerId.contains("yflix", ignoreCase = true) || providerId.contains("moviesflix", ignoreCase = true) -> 75
+                providerId.contains("rivestream", ignoreCase = true) -> 70
+                providerId.contains("vidfast", ignoreCase = true) -> 65
+                providerId.contains("videasy", ignoreCase = true) -> 60
+                providerId.contains("peachify", ignoreCase = true) -> 50
                 providerId.contains("vidsrc", ignoreCase = true) -> 25
                 else -> 0
             }
@@ -2677,6 +2703,8 @@ object StreamLinkOptimizer {
             synchronized(lock) {
                 stageTimerJob?.cancel()
                 stageTimerJob = null
+                topSourceTimerJob?.cancel()
+                topSourceTimerJob = null
                 top720TimerJob?.cancel()
                 top720TimerJob = null
                 fhdTimerJob?.cancel()
@@ -2710,8 +2738,8 @@ object StreamLinkOptimizer {
         fun hasTopStreamEmitted(): Boolean = hasEmittedTopStream
 
         companion object {
-            private val LEGACY_TOP_TIER_RANKS = listOf(100, 95, 92, 90, 88, 70)
-            private val TOP_TIER_RANKS = listOf(100, 95, 92, 90, 88, 70)
+            private val LEGACY_TOP_TIER_RANKS = listOf(100, 95, 90, 88, 85, 80)
+            private val TOP_TIER_RANKS = listOf(100, 95, 90, 88, 85, 80)
             fun is720p(link: ExtractorLink): Boolean {
                 val hasExplicit = link.quality > 0 && link.quality != Qualities.Unknown.value
                 val q = if (hasExplicit) {

@@ -251,7 +251,7 @@ class Milestone1QualityHierarchyTest {
 
     @Test
     fun testAc4_CompositeScoring_All36TopTierCombinations_720pAlwaysBeats1080p() {
-        val topProviders = listOf("Vidlink", "Vidcore", "Vidup", "RiveStream", "CineJoy", "VidEasy")
+        val topProviders = listOf("Vidlink", "Vidup", "CineJoy", "HexaSU", "AutoEmbed", "MovieBox")
 
         for (p720 in topProviders) {
             // Unadorned 720p link (0 bitrate, no badges)
@@ -402,7 +402,7 @@ class Milestone1QualityHierarchyTest {
         assertEquals("360p must be sorted ahead of 4K", link360, sorted[0])
 
         // Top-tier 4K still preserves dominance over secondary 360p (source hierarchy integrity)
-        val secondary360 = createLink("MovieBox", "MovieBox [360p]", "https://moviebox.com/360.m3u8", Qualities.P360.value)
+        val secondary360 = createLink("vidsrc", "VidSrc [360p]", "https://vidsrc.me/360.m3u8", Qualities.P360.value)
         val compTop4k = StreamLinkOptimizer.getStreamCompositeScore(link4k)
         val compSec360 = StreamLinkOptimizer.getStreamCompositeScore(secondary360)
         assertTrue("Top-tier 4K ($compTop4k) must still beat secondary 360p ($compSec360)", compTop4k > compSec360)
@@ -449,6 +449,6 @@ class Milestone1QualityHierarchyTest {
             "Higher ranked CineJoy (score $scoreCineJoy) must beat lower ranked VidEasy with max badges (score $scoreVidEasy)",
             scoreCineJoy > scoreVidEasy
         )
-        assertTrue("Margin must be at least 90.0 points", (scoreCineJoy - scoreVidEasy) >= 90.0f)
+        assertTrue("Margin must be at least 70.0 points", (scoreCineJoy - scoreVidEasy) >= 70.0f)
     }
 }

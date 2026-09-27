@@ -236,36 +236,36 @@ class EarlySatisfactionController(
 internal val FAST_PROVIDER_BOOST = mapOf(
     "vidlink" to 100f,
     "Vidlink" to 100f,
-    "vidcore" to 95f,
-    "Vidcore" to 95f,
-    "vidup" to 92f,
-    "Vidup" to 92f,
-    "rivestream" to 90f,
-    "RiveStream" to 90f,
-    "cinejoy" to 88f,
-    "CineJoy" to 88f,
-    "peachify" to 80f,
-    "Peachify" to 80f,
-    "videasy" to 70f,
-    "VidEasy" to 70f,
+    "vidup" to 95f,
+    "Vidup" to 95f,
+    "cinejoy" to 90f,
+    "CineJoy" to 90f,
+    "HexaSU" to 88f,
+    "hexasu" to 88f,
+    "flixersu" to 88f,
+    "flixer.su" to 88f,
+    "flixer" to 88f,
+    "embedsu" to 88f,
+    "embed.su" to 88f,
+    "autoembed" to 85f,
+    "AutoEmbed" to 85f,
+    "moviebox" to 80f,
+    "MovieBox" to 80f,
+    "MovieBox (Multi)" to 80f,
+    "yflix" to 75f,
+    "YFlix" to 75f,
+    "rivestream" to 70f,
+    "RiveStream" to 70f,
+    "vidfast" to 65f,
+    "VidFast" to 65f,
+    "videasy" to 60f,
+    "VidEasy" to 60f,
     "WyZIESUB" to 50f,
     "SubtitleAPI" to 50f,
-    "yflix" to 45f,
-    "YFlix" to 45f,
+    "peachify" to 50f,
+    "Peachify" to 50f,
     "moviesflix" to 45f,
     "MoviesFlix" to 45f,
-    "HexaSU" to 45f,
-    "hexasu" to 45f,
-    "flixersu" to 45f,
-    "flixer.su" to 45f,
-    "flixer" to 45f,
-    "embedsu" to 45f,
-    "embed.su" to 45f,
-    "autoembed" to 40f,
-    "AutoEmbed" to 40f,
-    "moviebox" to 35f,
-    "MovieBox" to 35f,
-    "MovieBox (Multi)" to 35f,
     "4khdhub" to 35f,
     "4kHdhub" to 35f,
     "4kHdhub (Multi)" to 35f,
@@ -274,8 +274,6 @@ internal val FAST_PROVIDER_BOOST = mapOf(
     "uhdmovies" to 35f,
     "UHDMovies" to 35f,
     "UHD Movies" to 35f,
-    "vidfast" to 30f,
-    "VidFast" to 30f,
     "vidsrc" to 25f,
     "VidSrc" to 25f,
     "VidSrc (Unified)" to 25f,
@@ -323,8 +321,6 @@ object SpeculativePipeliner {
         // Tier 1: Fast reliable JSON APIs & resolvers
         "vidlink" to LatencyTier.TIER_1,
         "Vidlink" to LatencyTier.TIER_1,
-        "vidcore" to LatencyTier.TIER_1,
-        "Vidcore" to LatencyTier.TIER_1,
         "vidup" to LatencyTier.TIER_1,
         "Vidup" to LatencyTier.TIER_1,
         "4khdhub" to LatencyTier.TIER_1,
@@ -366,6 +362,7 @@ object SpeculativePipeliner {
         "vidsrcme" to LatencyTier.TIER_1,
         "VidSrcMe" to LatencyTier.TIER_1,
         "rivestream" to LatencyTier.TIER_1,
+        "RiveStream" to LatencyTier.TIER_1,
         "moviesapi" to LatencyTier.TIER_1,
         "MoviesApi Club" to LatencyTier.TIER_1,
         "moviebox" to LatencyTier.TIER_1,
@@ -497,15 +494,15 @@ object SpeculativePipeliner {
 
         fun isTopTierTask(info: TrackedTaskInfo): Boolean {
             return StreamLinkOptimizer.isTopTierProvider(info.task.providerId) ||
-                info.task.priorityBoost >= 70f ||
-                (FAST_PROVIDER_BOOST[info.task.providerId] ?: 0f) >= 70f
+                info.task.priorityBoost >= 80f ||
+                (FAST_PROVIDER_BOOST[info.task.providerId] ?: 0f) >= 80f
         }
 
         fun isTopTierTask(task: PipelinedTask): Boolean {
             val boost = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
             return StreamLinkOptimizer.isTopTierProvider(task.providerId) ||
-                boost >= 70f ||
-                task.priorityBoost >= 70f
+                boost >= 80f ||
+                task.priorityBoost >= 80f
         }
 
         fun cancelLowerOrEqualPriorityJobs() {

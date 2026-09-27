@@ -55,7 +55,6 @@ import com.phisher98.StreamPlayExtractor.invokeVidSrcTo
 import com.phisher98.StreamPlayExtractor.invokeVidSrcXyz
 import com.phisher98.StreamPlayExtractor.invokeVideasy
 import com.phisher98.StreamPlayExtractor.invokeVidlink
-import com.phisher98.StreamPlayExtractor.invokeVidcore
 import com.phisher98.StreamPlayExtractor.invokeVidup
 import com.phisher98.StreamPlayExtractor.invokeVidzee
 import com.phisher98.StreamPlayExtractor.invokeWatchsomuch
@@ -154,40 +153,30 @@ private suspend fun getAnimeIds(res: StreamPlay.LinkData): StreamPlayExtractor.A
 private val providers by lazy {
     listOf(
         Provider("vidlink", "Vidlink") { res, subtitleCallback, callback, _, _ ->
-            if (!res.isAnime) invokeVidlink(res.id, res.season, res.episode, subtitleCallback, callback)
-        },
-        Provider("vidcore", "Vidcore") { res, subtitleCallback, callback, _, _ ->
-            if (!res.isAnime) invokeVidcore(res.id, res.season, res.episode, subtitleCallback, callback, res.imdbId)
+            if (!res.isAnime) invokeVidlink(res.id, res.season, res.episode, subtitleCallback, callback, res.imdbId)
         },
         Provider("vidup", "Vidup") { res, subtitleCallback, callback, _, _ ->
             if (!res.isAnime) invokeVidup(res.id, res.season, res.episode, subtitleCallback, callback, res.imdbId)
         },
-        Provider("rivestream", "RiveStream") { res, subtitleCallback, callback, _, _ ->
-            if (!res.isAnime) invokeRiveStream(res.id, res.season, res.episode, subtitleCallback, callback)
-        },
         Provider("cinejoy", "CineJoy") { res, subtitleCallback, callback, _, _ ->
             val titleToUse = res.title ?: res.orgTitle ?: res.nametitle
             if (!res.isAnime) invokeCineJoy(titleToUse, res.id, res.imdbId, res.year, res.season, res.episode, subtitleCallback, callback)
-        },
-        Provider("VidEasy", "VidEasy") { res, subtitleCallback, callback, _, _ ->
-            val titleToUse = res.title ?: res.orgTitle ?: res.nametitle
-            if (!res.isAnime) invokeVideasy(titleToUse, res.id, res.imdbId, res.year, res.season, res.episode, subtitleCallback, callback)
-        },
-        Provider("yflix", "YFlix") { res, subtitleCallback, callback, _, _ ->
-            val titleToUse = res.title ?: res.orgTitle ?: res.nametitle
-            if (!res.isAnime) invokeYFlix(titleToUse, res.id, res.imdbId, res.year, res.season, res.episode, subtitleCallback, callback)
-        },
-        Provider("vidfast", "VidFast") { res, subtitleCallback, callback, _, _ ->
-            if (!res.isAnime) invokeVidFast(res.id, res.season, res.episode, subtitleCallback, callback)
-        },
-        Provider("vidsrc", "VidSrc (Unified)") { res, subtitleCallback, callback, _, _ ->
-            if (!res.isAnime) invokeVidSrc(res.imdbId, res.season, res.episode, subtitleCallback, callback, res.id)
         },
         Provider("HexaSU", "HexaSU") { res, subtitleCallback, callback, _, _ ->
             if (!res.isAnime) invokeHexa(res.id, res.season, res.episode, subtitleCallback, callback)
         },
         Provider("autoembed", "AutoEmbed") { res, subtitleCallback, callback, _, _ ->
             if (!res.isAnime) invokeAutoembed(res.id, res.season, res.episode, subtitleCallback, callback)
+        },
+        Provider("moviebox", "MovieBox (Multi)") { res, subtitleCallback, callback, _, _ ->
+            if (!res.isAnime) invokeMovieBox(res.title, res.season, res.episode, subtitleCallback, callback)
+        },
+        Provider("yflix", "YFlix") { res, subtitleCallback, callback, _, _ ->
+            val titleToUse = res.title ?: res.orgTitle ?: res.nametitle
+            if (!res.isAnime) invokeYFlix(titleToUse, res.id, res.imdbId, res.year, res.season, res.episode, subtitleCallback, callback)
+        },
+        Provider("vidsrc", "VidSrc (Unified)") { res, subtitleCallback, callback, _, _ ->
+            if (!res.isAnime) invokeVidSrc(res.imdbId, res.season, res.episode, subtitleCallback, callback, res.id)
         },
         Provider("uhdmovies", "UHD Movies") { res, subtitleCallback, callback, _, _ ->
             if (!res.isAnime) invokeUhdmovies(res.title, res.year, res.season, res.episode, callback, subtitleCallback)
@@ -318,9 +307,6 @@ private val providers by lazy {
             if (!res.isAnime) invokeHdmovie2(res.title, res.year,
                 res.episode, subtitleCallback, callback)
         },
-        Provider("moviebox", "MovieBox (Multi)") { res, subtitleCallback, callback, _, _ ->
-            invokeMovieBox(res.title, res.season, res.episode, subtitleCallback, callback)
-        },
         Provider("vidrock", "Vidrock") { res, _, callback, _, _ ->
             if (!res.isAnime) invokevidrock(res.id, res.season, res.episode, callback)
         },
@@ -384,29 +370,30 @@ private val providers by lazy {
 
 val DEFAULT_TOP_TIER_PROVIDERS = setOf(
     "vidlink",
-    "vidcore",
     "vidup",
-    "rivestream",
     "cinejoy",
-    "VidEasy"
+    "HexaSU",
+    "autoembed",
+    "moviebox"
 )
 
 val DEAD_PROVIDER_IDS = setOf(
-    "HexaSU",
-    "autoembed",
+    "rivestream",
+    "vidfast",
+    "VidEasy",
+    "videasy",
     "superstream",
     "vaplayer",
-    "vidfast",
-    "yflix",
+    "vidcore",
     "vidsrc"
 )
 
 val NEWLY_PROMOTED_TOP_TIER_IDS = setOf(
-    "vidcore",
     "vidup",
-    "rivestream",
     "cinejoy",
-    "VidEasy"
+    "HexaSU",
+    "autoembed",
+    "moviebox"
 )
 
 fun getDefaultDisabledProviderIds(): Set<String> =
@@ -414,13 +401,13 @@ fun getDefaultDisabledProviderIds(): Set<String> =
 
 fun buildProviders(): List<Provider> = providers
 
-const val PREFS_TOP_TIER_INITIALIZED = "streamplay_top_tier_v11_initialized"
+const val PREFS_TOP_TIER_INITIALIZED = "streamplay_top_tier_v14_initialized"
 
 /**
- * Ensures clean installs enable DEFAULT_TOP_TIER_PROVIDERS (Vidlink > Vidcore > Vidup > RiveStream > CineJoy > VidEasy)
- * with all secondary and dead sources disabled by default, and seamlessly migrates upgrading users to v11:
- * disables dead/bloated providers (HexaSU, autoembed, superstream, vaplayer, vidfast, yflix, vidsrc),
- * enables newly promoted SOTA providers (vidcore, vidup, rivestream, cinejoy, VidEasy), and strictly preserves existing user customizations.
+ * Ensures clean installs enable DEFAULT_TOP_TIER_PROVIDERS (Vidlink > Vidup > CineJoy > HexaSU > AutoEmbed > MovieBox)
+ * with all secondary and dead sources disabled by default, and seamlessly migrates upgrading users to v14:
+ * permanently disables dead/unreliable providers (rivestream, vidfast, VidEasy, videasy, superstream, vaplayer, vidcore, vidsrc),
+ * enables newly promoted SOTA providers (vidlink, vidup, cinejoy, HexaSU, autoembed, moviebox), and strictly preserves existing user customizations.
  */
 fun getOrInitializeDisabledProviders(sharedPref: SharedPreferences?): Set<String> {
     if (sharedPref == null) return getDefaultDisabledProviderIds()
@@ -430,11 +417,11 @@ fun getOrInitializeDisabledProviders(sharedPref: SharedPreferences?): Set<String
         val defaultDisabled = getDefaultDisabledProviderIds()
         val existingDisabled = sharedPref.getStringSet("disabled_providers", null)
         val finalDisabled = if (existingDisabled.isNullOrEmpty()) {
-            defaultDisabled
+            defaultDisabled + DEAD_PROVIDER_IDS
         } else {
-            // Override-preserving migration to v11:
-            // 1. Add dead providers to disabled set (including vidfast, vidsrc, yflix, etc.)
-            // 2. Remove newly promoted top-tier providers from disabled set (vidcore, vidup, rivestream, cinejoy, VidEasy)
+            // Override-preserving migration to v14:
+            // 1. Add dead providers to disabled set (including rivestream, vidfast, VidEasy, vidcore, vidsrc, etc.)
+            // 2. Remove newly promoted top-tier providers from disabled set (vidlink, vidup, cinejoy, HexaSU, autoembed, moviebox)
             // 3. Retain user's custom enabling/disabling of existing providers intact
             (existingDisabled + DEAD_PROVIDER_IDS) - NEWLY_PROMOTED_TOP_TIER_IDS
         }
@@ -448,9 +435,12 @@ fun getOrInitializeDisabledProviders(sharedPref: SharedPreferences?): Set<String
             putBoolean("streamplay_top_tier_v8_initialized", true)
             putBoolean("streamplay_top_tier_v9_initialized", true)
             putBoolean("streamplay_top_tier_v10_initialized", true)
+            putBoolean("streamplay_top_tier_v11_initialized", true)
+            putBoolean("streamplay_top_tier_v12_initialized", true)
+            putBoolean("streamplay_top_tier_v13_initialized", true)
             putBoolean(PREFS_TOP_TIER_INITIALIZED, true)
         }
-        Log.d("StreamPlay", "🎯 Initialized top-tier provider defaults v11: ${DEFAULT_TOP_TIER_PROVIDERS.size} active, ${finalDisabled.size} disabled")
+        Log.d("StreamPlay", "🎯 Initialized top-tier provider defaults v14: ${DEFAULT_TOP_TIER_PROVIDERS.size} active, ${finalDisabled.size} disabled")
         return finalDisabled
     }
     return sharedPref.getStringSet("disabled_providers", null) ?: getDefaultDisabledProviderIds()

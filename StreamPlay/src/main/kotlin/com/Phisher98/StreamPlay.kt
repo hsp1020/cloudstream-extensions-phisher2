@@ -82,7 +82,6 @@ internal val NON_ANIME_PROVIDERS = setOf(
     "CinemaCity",
     "vidzeeapi",
     "hdhub4u",
-    "rivestream",
     "vidrock",
     "vidlink",
     "vidcore",
@@ -103,8 +102,7 @@ internal val NON_ANIME_PROVIDERS = setOf(
     "Zinkmovies",
     "Peachify",
     "autoembed",
-    "vidfast",
-    "VidEasy"
+    "moviebox"
 )
 
 
@@ -886,15 +884,15 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
         val providersCompleted = java.util.concurrent.atomic.AtomicInteger(0)
         val activeTopRanks = applicableProviders.mapNotNull {
             val boost = FAST_PROVIDER_BOOST[it.id] ?: 0f
-            if (boost >= 70f) boost.toInt() else null
+            if (boost >= 80f) boost.toInt() else null
         }.toSet()
         val runningTopProviders = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-        runningTopProviders.addAll(applicableProviders.filter { (FAST_PROVIDER_BOOST[it.id] ?: 0f) >= 70f }.map { it.id })
+        runningTopProviders.addAll(applicableProviders.filter { (FAST_PROVIDER_BOOST[it.id] ?: 0f) >= 80f }.map { it.id })
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
             upstreamCallback = callback,
             scope = this,
-            topSourceGraceMs = 1200L,
-            top720GraceMs = 2500L,
+            topSourceGraceMs = if (slowInternetMode) 5000L else 3500L,
+            top720GraceMs = if (slowInternetMode) 6000L else 4500L,
             activeTopRanks = activeTopRanks,
             isRankInFlight = { rank -> runningTopProviders.any { (FAST_PROVIDER_BOOST[it] ?: 0f).toInt() == rank } }
         )
@@ -1012,7 +1010,7 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
                     )
                 } finally {
                     val boost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
-                    if (boost >= 70f) {
+                    if (boost >= 80f) {
                         runningTopProviders.remove(provider.id)
                         val rank = boost.toInt()
                         val hasRemainingWithRank = runningTopProviders.any { (FAST_PROVIDER_BOOST[it] ?: 0f).toInt() == rank }

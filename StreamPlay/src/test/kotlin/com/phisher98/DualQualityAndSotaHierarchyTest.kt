@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -97,41 +98,44 @@ class DualQualityAndSotaHierarchyTest {
 
     @Test
     fun testSourcePriorityRankStrictMonotonicity() {
-        // Priority order: VidLink (100) > Vidcore (95) > Vidup (92) > RiveStream (90) > CineJoy (88) > VidEasy (70)
+        // Priority order: VidLink (100) > Vidup (95) > CineJoy (90) > HexaSU (88) > AutoEmbed (85) > MovieBox (80)
         val rVidlink = StreamLinkOptimizer.getSourcePriorityRank(createLink("VidLink", "VidLink", "https://vidlink.pro/v.m3u8"))
-        val rVidcore = StreamLinkOptimizer.getSourcePriorityRank(createLink("vidcore", "vidcore", "https://vidcore.io/v.m3u8"))
         val rVidup = StreamLinkOptimizer.getSourcePriorityRank(createLink("vidup", "vidup", "https://vidup.to/v.m3u8"))
-        val rRivestream = StreamLinkOptimizer.getSourcePriorityRank(createLink("rivestream", "rivestream", "https://rivestream.org/v.m3u8"))
         val rCinejoy = StreamLinkOptimizer.getSourcePriorityRank(createLink("CineJoy", "CineJoy", "https://cinejoy.to/v.m3u8"))
-        val rVideasy = StreamLinkOptimizer.getSourcePriorityRank(createLink("VidEasy", "VidEasy", "https://player.videasy.to/v.m3u8"))
-        val rYflix = StreamLinkOptimizer.getSourcePriorityRank(createLink("YFlix", "YFlix", "https://yflix.to/v.m3u8"))
         val rHexa = StreamLinkOptimizer.getSourcePriorityRank(createLink("HexaSU", "HexaSU", "https://hexa.su/v.m3u8"))
         val rAutoembed = StreamLinkOptimizer.getSourcePriorityRank(createLink("AutoEmbed", "AutoEmbed", "https://autoembed.cc/v.m3u8"))
+        val rMoviebox = StreamLinkOptimizer.getSourcePriorityRank(createLink("MovieBox", "MovieBox", "https://moviebox.com/v.m3u8"))
+        val rYflix = StreamLinkOptimizer.getSourcePriorityRank(createLink("YFlix", "YFlix", "https://yflix.to/v.m3u8"))
+        val rRivestream = StreamLinkOptimizer.getSourcePriorityRank(createLink("rivestream", "rivestream", "https://rivestream.org/v.m3u8"))
         val rVidfast = StreamLinkOptimizer.getSourcePriorityRank(createLink("VidFast", "VidFast", "https://vidfast.vc/v.m3u8"))
+        val rVideasy = StreamLinkOptimizer.getSourcePriorityRank(createLink("VidEasy", "VidEasy", "https://player.videasy.to/v.m3u8"))
+        val rVidcore = StreamLinkOptimizer.getSourcePriorityRank(createLink("vidcore", "vidcore", "https://vidcore.io/v.m3u8"))
         val rVidsrc = StreamLinkOptimizer.getSourcePriorityRank(createLink("VidSrc", "VidSrc", "https://vidsrc.xyz/v.m3u8"))
 
         assertEquals(100, rVidlink)
-        assertEquals(95, rVidcore)
-        assertEquals(92, rVidup)
-        assertEquals(90, rRivestream)
-        assertEquals(88, rCinejoy)
-        assertEquals(70, rVideasy)
-        assertEquals(45, rYflix)
-        assertEquals(45, rHexa)
-        assertEquals(40, rAutoembed)
-        assertEquals(30, rVidfast)
+        assertEquals(95, rVidup)
+        assertEquals(90, rCinejoy)
+        assertEquals(88, rHexa)
+        assertEquals(85, rAutoembed)
+        assertEquals(80, rMoviebox)
+        assertEquals(75, rYflix)
+        assertEquals(70, rRivestream)
+        assertEquals(65, rVidfast)
+        assertEquals(60, rVideasy)
+        assertEquals(0, rVidcore)
         assertEquals(25, rVidsrc)
 
         // Monotonicity of modern SOTA providers
-        assertTrue(rVidlink > rVidcore)
-        assertTrue(rVidcore > rVidup)
-        assertTrue(rVidup > rRivestream)
-        assertTrue(rRivestream > rCinejoy)
-        assertTrue(rCinejoy > rVideasy)
-        assertTrue(rVideasy > rYflix)
-        assertTrue(rYflix > rAutoembed)
-        assertTrue(rAutoembed > rVidfast)
-        assertTrue(rVidfast > rVidsrc)
+        assertTrue(rVidlink > rVidup)
+        assertTrue(rVidup > rCinejoy)
+        assertTrue(rCinejoy > rHexa)
+        assertTrue(rHexa > rAutoembed)
+        assertTrue(rAutoembed > rMoviebox)
+        assertTrue(rMoviebox > rYflix)
+        assertTrue(rYflix > rRivestream)
+        assertTrue(rRivestream > rVidfast)
+        assertTrue(rVidfast > rVideasy)
+        assertTrue(rVideasy > rVidsrc)
     }
 
     @Test
@@ -393,12 +397,12 @@ class DualQualityAndSotaHierarchyTest {
             subtitleGraceMs = 150L
         )
 
-        val vidcore1080 = createLink("vidcore", "vidcore [1080p]", "https://vidcore.io/1080.m3u8", Qualities.P1080.value)
+        val vidup1080 = createLink("vidup", "vidup [1080p]", "https://vidup.to/1080.m3u8", Qualities.P1080.value)
         val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
         val vidlink480 = createLink("VidLink", "VidLink [480p]", "https://vidlink.pro/480.m3u8", Qualities.P480.value)
 
-        // 1. vidcore 1080p arrives first at t=0ms
-        dispatcher.onLinkAccepted(vidcore1080)
+        // 1. vidup 1080p arrives first at t=0ms
+        dispatcher.onLinkAccepted(vidup1080)
         assertTrue("1080p must be staged while waiting for 720p", dispatchedLinks.isEmpty())
 
         // 2. Subtitles arrive at t=20ms
@@ -411,7 +415,7 @@ class DualQualityAndSotaHierarchyTest {
         // VidLink 720p must be dispatched IMMEDIATELY as link #1 because 720p + subtitles are satisfied!
         assertTrue("Dispatcher must have emitted top stream", dispatcher.hasTopStreamEmitted())
         assertEquals("First dispatched link must be VidLink 720p", vidlink720, dispatchedLinks[0])
-        assertEquals("Second dispatched link must be vidcore 1080p", vidcore1080, dispatchedLinks[1])
+        assertEquals("Second dispatched link must be vidup 1080p", vidup1080, dispatchedLinks[1])
 
         // 4. Later arriving 480p link
         dispatcher.onLinkAccepted(vidlink480)
@@ -582,11 +586,11 @@ class DualQualityAndSotaHierarchyTest {
     fun testTopTierSourcesDirectVideoQualityCoexistenceInDeduplicator() {
         val topSources = listOf(
             "VidLink" to 100,
-            "vidcore" to 95,
-            "vidup" to 92,
-            "rivestream" to 90,
-            "CineJoy" to 88,
-            "VidEasy" to 70
+            "vidup" to 95,
+            "CineJoy" to 90,
+            "HexaSU" to 88,
+            "AutoEmbed" to 85,
+            "MovieBox" to 80
         )
 
         for ((sourceName, expectedRank) in topSources) {
@@ -647,7 +651,7 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals(Qualities.P720.value, emittedLinks[0].quality)
 
         // 480p arrives while 1080p is still in flight -> staged in pendingBelowFhdLinks!
-        val link480 = createLink("vidcore", "vidcore [480p]", "https://vidcore.io/v_480.m3u8", Qualities.P480.value, ExtractorLinkType.M3U8)
+        val link480 = createLink("vidup", "vidup [480p]", "https://vidup.to/v_480.m3u8", Qualities.P480.value, ExtractorLinkType.M3U8)
         dispatcher.onLinkAccepted(link480)
         assertEquals("480p must not be emitted before 1080p", 1, emittedLinks.size)
 
@@ -681,7 +685,7 @@ class DualQualityAndSotaHierarchyTest {
         dispatcher.onLinkAccepted(link720)
 
         // Lower and higher qualities arrive out of order
-        val link480 = createLink("vidcore", "vidcore [480p]", "https://vidcore.io/v480.m3u8", Qualities.P480.value, ExtractorLinkType.M3U8)
+        val link480 = createLink("vidup", "vidup [480p]", "https://vidup.to/v480.m3u8", Qualities.P480.value, ExtractorLinkType.M3U8)
         val link4k = createLink("VidEasy", "VidEasy [4K]", "https://player.videasy.to/v4k.m3u8", Qualities.P2160.value, ExtractorLinkType.M3U8)
 
         dispatcher.onLinkAccepted(link480)
@@ -752,7 +756,7 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals(1, emittedLinks.size)
 
         // 2. Emit 1080p (#2)
-        val link1080 = createLink("vidcore", "vidcore [1080p]", "https://vidcore.io/v1080.m3u8", Qualities.P1080.value, ExtractorLinkType.M3U8)
+        val link1080 = createLink("vidup", "vidup [1080p]", "https://vidup.to/v1080.m3u8", Qualities.P1080.value, ExtractorLinkType.M3U8)
         dispatcher.onLinkAccepted(link1080)
         assertEquals(2, emittedLinks.size)
 
@@ -837,11 +841,11 @@ class DualQualityAndSotaHierarchyTest {
     fun testEmitTopTierDualQualityStreamLinksAllSixTopSourcesDirectVideo() = runBlocking {
         val topSources = listOf(
             "VidLink" to 100,
-            "vidcore" to 95,
-            "vidup" to 92,
-            "rivestream" to 90,
-            "CineJoy" to 88,
-            "VidEasy" to 70
+            "vidup" to 95,
+            "CineJoy" to 90,
+            "HexaSU" to 88,
+            "AutoEmbed" to 85,
+            "MovieBox" to 80
         )
 
         for ((srcName, expectedRank) in topSources) {
@@ -930,7 +934,7 @@ class DualQualityAndSotaHierarchyTest {
 
         val link1 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/1.m3u8", Qualities.P720.value)
         val link2 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://autoembed.cc/2.m3u8", Qualities.P720.value)
-        val link3 = createLink("VidFast", "VidFast [720p]", "https://vidfast.vc/3.m3u8", Qualities.P720.value)
+        val link3 = createLink("MovieBox", "MovieBox [720p]", "https://moviebox.ph/3.m3u8", Qualities.P720.value)
 
         dispatcher.onLinkAccepted(link1)
         delay(60L)
@@ -943,7 +947,7 @@ class DualQualityAndSotaHierarchyTest {
 
         assertTrue("Dispatcher must have emitted top stream without timer starvation", dispatcher.hasTopStreamEmitted())
         assertTrue("Emitted links must not be empty", emitted.isNotEmpty())
-        assertEquals("Highest rank among arrived (HexaSU 90) must be emitted first", Qualities.P720.value, emitted[0].quality)
+        assertEquals("Highest rank among arrived (HexaSU 45) must be emitted first", Qualities.P720.value, emitted[0].quality)
         assertTrue("Emitted #1 must be HexaSU", emitted[0].source.contains("HexaSU"))
 
         dispatcher.flush()
@@ -952,26 +956,26 @@ class DualQualityAndSotaHierarchyTest {
     @Test
     fun testExactSotaTopSourcesAndDualQuality12SequenceHierarchy() {
         // User Specification:
-        // VidLink 100 with 720 > vidcore 95 with 720 > vidup 92 with 720 > rivestream 90 with 720 > CineJoy 88 with 720 > VidEasy 70 with 720
-        // then > VidLink with 1080 > vidcore with 1080 > vidup with 1080 > rivestream with 1080 > CineJoy with 1080 > VidEasy with 1080
+        // VidLink 100 with 720 > vidup 95 with 720 > CineJoy 90 with 720 > HexaSU 88 with 720 > AutoEmbed 85 with 720 > MovieBox 80 with 720
+        // then > VidLink with 1080 > vidup with 1080 > CineJoy with 1080 > HexaSU with 1080 > AutoEmbed with 1080 > MovieBox with 1080
 
         val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
-        val vidcore720 = createLink("vidcore", "vidcore [720p]", "https://vidcore.io/720.m3u8", Qualities.P720.value)
         val vidup720 = createLink("vidup", "vidup [720p]", "https://vidup.to/720.m3u8", Qualities.P720.value)
-        val rivestream720 = createLink("rivestream", "rivestream [720p]", "https://rivestream.org/720.m3u8", Qualities.P720.value)
         val cinejoy720 = createLink("CineJoy", "CineJoy [720p]", "https://cinejoy.to/720.m3u8", Qualities.P720.value)
-        val videasy720 = createLink("VidEasy", "VidEasy [720p]", "https://player.videasy.to/720.m3u8", Qualities.P720.value)
+        val hexasu720 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/720.m3u8", Qualities.P720.value)
+        val autoembed720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://player.autoembed.cc/720.m3u8", Qualities.P720.value)
+        val moviebox720 = createLink("MovieBox", "MovieBox [720p]", "https://moviebox.com/720.m3u8", Qualities.P720.value)
 
         val vidlink1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
-        val vidcore1080 = createLink("vidcore", "vidcore [1080p]", "https://vidcore.io/1080.m3u8", Qualities.P1080.value)
         val vidup1080 = createLink("vidup", "vidup [1080p]", "https://vidup.to/1080.m3u8", Qualities.P1080.value)
-        val rivestream1080 = createLink("rivestream", "rivestream [1080p]", "https://rivestream.org/1080.m3u8", Qualities.P1080.value)
         val cinejoy1080 = createLink("CineJoy", "CineJoy [1080p]", "https://cinejoy.to/1080.m3u8", Qualities.P1080.value)
-        val videasy1080 = createLink("VidEasy", "VidEasy [1080p]", "https://player.videasy.to/1080.m3u8", Qualities.P1080.value)
+        val hexasu1080 = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/1080.m3u8", Qualities.P1080.value)
+        val autoembed1080 = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/1080.m3u8", Qualities.P1080.value)
+        val moviebox1080 = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.com/1080.m3u8", Qualities.P1080.value)
 
         val expectedOrder = listOf(
-            vidlink720, vidcore720, vidup720, rivestream720, cinejoy720, videasy720,
-            vidlink1080, vidcore1080, vidup1080, rivestream1080, cinejoy1080, videasy1080
+            vidlink720, vidup720, cinejoy720, hexasu720, autoembed720, moviebox720,
+            vidlink1080, vidup1080, cinejoy1080, hexasu1080, autoembed1080, moviebox1080
         )
 
         // 1. Verify strict pairwise inequality of scores
@@ -992,22 +996,22 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals(expectedOrder, sorted)
 
         // 3. Verify tiebreakers can NEVER invert tiers:
-        // Even with max bitrate (50 Mbps) + REMUX + DV + Atmos, VidLink 1080p MUST NOT beat lowest top 720p (VidEasy 720p)
+        // Even with max bitrate (50 Mbps) + REMUX + DV + Atmos, VidLink 1080p MUST NOT beat lowest top 720p (MovieBox 720p)
         val vidlink1080SuperMega = createLink(
             "VidLink",
             "[1080p] [REMUX] [DV] [50 Mbps] [Atmos] VidLink Mega",
             "https://vidlink.pro/1080_heavy.m3u8",
             Qualities.P1080.value
         )
-        val videasy720Plain = createLink(
-            "VidEasy",
-            "VidEasy Basic",
-            "https://player.videasy.to/720.m3u8",
+        val moviebox720Plain = createLink(
+            "MovieBox",
+            "MovieBox Basic",
+            "https://moviebox.com/720.m3u8",
             Qualities.P720.value
         )
         assertTrue(
-            "VidEasy 720p plain must strictly beat VidLink 1080p with max tiebreakers",
-            StreamLinkOptimizer.getStreamCompositeScore(videasy720Plain) > StreamLinkOptimizer.getStreamCompositeScore(vidlink1080SuperMega)
+            "MovieBox 720p plain must strictly beat VidLink 1080p with max tiebreakers",
+            StreamLinkOptimizer.getStreamCompositeScore(moviebox720Plain) > StreamLinkOptimizer.getStreamCompositeScore(vidlink1080SuperMega)
         )
     }
 
@@ -1051,20 +1055,20 @@ class DualQualityAndSotaHierarchyTest {
         val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
         val vidlink1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
 
-        val vidcore720 = createLink("vidcore", "vidcore [720p]", "https://vidcore.io/720.m3u8", Qualities.P720.value)
-        val vidcore1080 = createLink("vidcore", "vidcore [1080p]", "https://vidcore.io/1080.m3u8", Qualities.P1080.value)
-
         val vidup720 = createLink("vidup", "vidup [720p]", "https://vidup.to/720.m3u8", Qualities.P720.value)
         val vidup1080 = createLink("vidup", "vidup [1080p]", "https://vidup.to/1080.m3u8", Qualities.P1080.value)
-
-        val rivestream720 = createLink("rivestream", "rivestream [720p]", "https://rivestream.org/720.m3u8", Qualities.P720.value)
-        val rivestream1080 = createLink("rivestream", "rivestream [1080p]", "https://rivestream.org/1080.m3u8", Qualities.P1080.value)
 
         val cinejoy720 = createLink("CineJoy", "CineJoy [720p]", "https://cinejoy.to/720.m3u8", Qualities.P720.value)
         val cinejoy1080 = createLink("CineJoy", "CineJoy [1080p]", "https://cinejoy.to/1080.m3u8", Qualities.P1080.value)
 
-        val videasy720 = createLink("VidEasy", "VidEasy [720p]", "https://player.videasy.to/720.m3u8", Qualities.P720.value)
-        val videasy1080 = createLink("VidEasy", "VidEasy [1080p]", "https://player.videasy.to/1080.m3u8", Qualities.P1080.value)
+        val hexasu720 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/720.m3u8", Qualities.P720.value)
+        val hexasu1080 = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/1080.m3u8", Qualities.P1080.value)
+
+        val autoembed720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://player.autoembed.cc/720.m3u8", Qualities.P720.value)
+        val autoembed1080 = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/1080.m3u8", Qualities.P1080.value)
+
+        val moviebox720 = createLink("MovieBox", "MovieBox [720p]", "https://moviebox.com/720.m3u8", Qualities.P720.value)
+        val moviebox1080 = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.com/1080.m3u8", Qualities.P1080.value)
 
         // 1. VidLink finishes at t=0ms and emits both 720p and 1080p
         dispatcher.onLinkAccepted(vidlink720)
@@ -1074,40 +1078,40 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals("At t=0, only VidLink 720p should be emitted; 1080p must be staged", 1, emittedLinks.size)
         assertEquals(vidlink720, emittedLinks[0])
 
-        // 2. vidcore finishes at t=30ms and emits both
-        delay(30L)
-        dispatcher.onLinkAccepted(vidcore720)
-        dispatcher.onLinkAccepted(vidcore1080)
-        assertEquals("At t=30ms, vidcore 720p must emit immediately ahead of 1080p", 2, emittedLinks.size)
-        assertEquals(vidcore720, emittedLinks[1])
-
-        // 3. vidup finishes at t=60ms
+        // 2. vidup finishes at t=30ms and emits both
         delay(30L)
         dispatcher.onLinkAccepted(vidup720)
         dispatcher.onLinkAccepted(vidup1080)
-        assertEquals(3, emittedLinks.size)
-        assertEquals(vidup720, emittedLinks[2])
+        assertEquals("At t=30ms, vidup 720p must emit immediately ahead of 1080p", 2, emittedLinks.size)
+        assertEquals(vidup720, emittedLinks[1])
 
-        // 4. rivestream finishes at t=90ms
-        delay(30L)
-        dispatcher.onLinkAccepted(rivestream720)
-        dispatcher.onLinkAccepted(rivestream1080)
-        assertEquals(4, emittedLinks.size)
-        assertEquals(rivestream720, emittedLinks[3])
-
-        // 5. CineJoy finishes at t=120ms
+        // 3. CineJoy finishes at t=60ms
         delay(30L)
         dispatcher.onLinkAccepted(cinejoy720)
         dispatcher.onLinkAccepted(cinejoy1080)
-        assertEquals(5, emittedLinks.size)
-        assertEquals(cinejoy720, emittedLinks[4])
+        assertEquals(3, emittedLinks.size)
+        assertEquals(cinejoy720, emittedLinks[2])
 
-        // 6. VidEasy finishes at t=150ms
+        // 4. HexaSU finishes at t=90ms
         delay(30L)
-        dispatcher.onLinkAccepted(videasy720)
-        dispatcher.onLinkAccepted(videasy1080)
+        dispatcher.onLinkAccepted(hexasu720)
+        dispatcher.onLinkAccepted(hexasu1080)
+        assertEquals(4, emittedLinks.size)
+        assertEquals(hexasu720, emittedLinks[3])
+
+        // 5. AutoEmbed finishes at t=120ms
+        delay(30L)
+        dispatcher.onLinkAccepted(autoembed720)
+        dispatcher.onLinkAccepted(autoembed1080)
+        assertEquals(5, emittedLinks.size)
+        assertEquals(autoembed720, emittedLinks[4])
+
+        // 6. MovieBox finishes at t=150ms
+        delay(30L)
+        dispatcher.onLinkAccepted(moviebox720)
+        dispatcher.onLinkAccepted(moviebox1080)
         assertEquals("All 6 top-tier 720p streams must be emitted before ANY 1080p stream", 6, emittedLinks.size)
-        assertEquals(videasy720, emittedLinks[5])
+        assertEquals(moviebox720, emittedLinks[5])
 
         // 7. Wait for top720GraceMs timer to fire and release 1080p tier
         delay(180L)
@@ -1115,8 +1119,8 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals("After grace timer, all 12 streams must be emitted in exact SOTA sequence", 12, emittedLinks.size)
 
         val expectedExactOrder = listOf(
-            vidlink720, vidcore720, vidup720, rivestream720, cinejoy720, videasy720,
-            vidlink1080, vidcore1080, vidup1080, rivestream1080, cinejoy1080, videasy1080
+            vidlink720, vidup720, cinejoy720, hexasu720, autoembed720, moviebox720,
+            vidlink1080, vidup1080, cinejoy1080, hexasu1080, autoembed1080, moviebox1080
         )
         assertEquals(expectedExactOrder, emittedLinks)
 
@@ -1178,20 +1182,20 @@ class DualQualityAndSotaHierarchyTest {
         val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
         val vidlink1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
 
-        val vidcore720 = createLink("vidcore", "vidcore [720p]", "https://vidcore.io/720.m3u8", Qualities.P720.value)
-        val vidcore1080 = createLink("vidcore", "vidcore [1080p]", "https://vidcore.io/1080.m3u8", Qualities.P1080.value)
-
         val vidup720 = createLink("vidup", "vidup [720p]", "https://vidup.to/720.m3u8", Qualities.P720.value)
         val vidup1080 = createLink("vidup", "vidup [1080p]", "https://vidup.to/1080.m3u8", Qualities.P1080.value)
-
-        val rivestream720 = createLink("rivestream", "rivestream [720p]", "https://rivestream.org/720.m3u8", Qualities.P720.value)
-        val rivestream1080 = createLink("rivestream", "rivestream [1080p]", "https://rivestream.org/1080.m3u8", Qualities.P1080.value)
 
         val cinejoy720 = createLink("CineJoy", "CineJoy [720p]", "https://cinejoy.to/720.m3u8", Qualities.P720.value)
         val cinejoy1080 = createLink("CineJoy", "CineJoy [1080p]", "https://cinejoy.to/1080.m3u8", Qualities.P1080.value)
 
-        val videasy720 = createLink("VidEasy", "VidEasy [720p]", "https://player.videasy.to/720.m3u8", Qualities.P720.value)
-        val videasy1080 = createLink("VidEasy", "VidEasy [1080p]", "https://player.videasy.to/1080.m3u8", Qualities.P1080.value)
+        val hexasu720 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/720.m3u8", Qualities.P720.value)
+        val hexasu1080 = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/1080.m3u8", Qualities.P1080.value)
+
+        val autoembed720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://player.autoembed.cc/720.m3u8", Qualities.P720.value)
+        val autoembed1080 = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/1080.m3u8", Qualities.P1080.value)
+
+        val moviebox720 = createLink("MovieBox", "MovieBox [720p]", "https://moviebox.com/720.m3u8", Qualities.P720.value)
+        val moviebox1080 = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.com/1080.m3u8", Qualities.P1080.value)
 
         // 1. VidLink finishes at t=0ms and emits both 720p and 1080p
         dispatcher.onLinkAccepted(vidlink720)
@@ -1199,42 +1203,42 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals("VidLink 720p should emit immediately", 1, emittedLinks.size)
         assertEquals(vidlink720, emittedLinks[0])
 
-        // 2. Out-of-order arrival: vidup (rank 92) arrives BEFORE vidcore (rank 95) at t=20ms
+        // 2. Out-of-order arrival: CineJoy (rank 90) arrives BEFORE vidup (rank 95) at t=20ms
         delay(20L)
-        dispatcher.onLinkAccepted(vidup720)
-        dispatcher.onLinkAccepted(vidup1080)
-        assertEquals("vidup 720p must be held in pendingTop720Links because vidcore (95) is pending", 1, emittedLinks.size)
-
-        // 3. vidcore (rank 95) arrives at t=50ms
-        delay(30L)
-        dispatcher.onLinkAccepted(vidcore720)
-        dispatcher.onLinkAccepted(vidcore1080)
-        // vidcore 720p must emit, and vidup 720p must immediately drain!
-        assertEquals("vidcore 720p must emit and drain vidup 720p immediately", 3, emittedLinks.size)
-        assertEquals(vidcore720, emittedLinks[1])
-        assertEquals(vidup720, emittedLinks[2])
-
-        // 4. rivestream (rank 90) arrives at t=70ms (in-order with respect to completed 100, 95, 92)
-        delay(20L)
-        dispatcher.onLinkAccepted(rivestream720)
-        dispatcher.onLinkAccepted(rivestream1080)
-        assertEquals("rivestream 90 should emit immediately", 4, emittedLinks.size)
-        assertEquals(rivestream720, emittedLinks[3])
-
-        // 5. Out-of-order arrival: VidEasy (rank 70) arrives BEFORE CineJoy (rank 88) at t=90ms
-        delay(20L)
-        dispatcher.onLinkAccepted(videasy720)
-        dispatcher.onLinkAccepted(videasy1080)
-        assertEquals("VidEasy 720p must be held because CineJoy (88) has not completed", 4, emittedLinks.size)
-
-        // 6. CineJoy (rank 88) arrives at t=120ms
-        delay(30L)
         dispatcher.onLinkAccepted(cinejoy720)
         dispatcher.onLinkAccepted(cinejoy1080)
-        // CineJoy 720p emits and VidEasy 720p drains
+        assertEquals("CineJoy 720p must be held in pendingTop720Links because vidup (95) is pending", 1, emittedLinks.size)
+
+        // 3. vidup (rank 95) arrives at t=50ms
+        delay(30L)
+        dispatcher.onLinkAccepted(vidup720)
+        dispatcher.onLinkAccepted(vidup1080)
+        // vidup 720p must emit, and CineJoy 720p must immediately drain!
+        assertEquals("vidup 720p must emit and drain CineJoy 720p immediately", 3, emittedLinks.size)
+        assertEquals(vidup720, emittedLinks[1])
+        assertEquals(cinejoy720, emittedLinks[2])
+
+        // 4. HexaSU (rank 88) arrives at t=70ms (in-order with respect to completed 100, 95, 90)
+        delay(20L)
+        dispatcher.onLinkAccepted(hexasu720)
+        dispatcher.onLinkAccepted(hexasu1080)
+        assertEquals("HexaSU 88 should emit immediately", 4, emittedLinks.size)
+        assertEquals(hexasu720, emittedLinks[3])
+
+        // 5. Out-of-order arrival: MovieBox (rank 80) arrives BEFORE AutoEmbed (rank 85) at t=90ms
+        delay(20L)
+        dispatcher.onLinkAccepted(moviebox720)
+        dispatcher.onLinkAccepted(moviebox1080)
+        assertEquals("MovieBox 720p must be held because AutoEmbed (85) has not completed", 4, emittedLinks.size)
+
+        // 6. AutoEmbed (rank 85) arrives at t=120ms
+        delay(30L)
+        dispatcher.onLinkAccepted(autoembed720)
+        dispatcher.onLinkAccepted(autoembed1080)
+        // AutoEmbed 720p emits and MovieBox 720p drains
         assertEquals("All 6 top-tier 720p streams must now be emitted in exact rank order", 6, emittedLinks.size)
-        assertEquals(cinejoy720, emittedLinks[4])
-        assertEquals(videasy720, emittedLinks[5])
+        assertEquals(autoembed720, emittedLinks[4])
+        assertEquals(moviebox720, emittedLinks[5])
 
         // 7. Wait for top720GraceMs timer to fire and release 1080p tier
         delay(200L)
@@ -1242,8 +1246,8 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals("After grace timer, all 12 streams must be emitted in exact SOTA sequence", 12, emittedLinks.size)
 
         val expectedExactOrder = listOf(
-            vidlink720, vidcore720, vidup720, rivestream720, cinejoy720, videasy720,
-            vidlink1080, vidcore1080, vidup1080, rivestream1080, cinejoy1080, videasy1080
+            vidlink720, vidup720, cinejoy720, hexasu720, autoembed720, moviebox720,
+            vidlink1080, vidup1080, cinejoy1080, hexasu1080, autoembed1080, moviebox1080
         )
         assertEquals(expectedExactOrder, emittedLinks)
 
@@ -1325,8 +1329,8 @@ class DualQualityAndSotaHierarchyTest {
 
         val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
         val vidlink1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
+        val cinejoy720 = createLink("CineJoy", "CineJoy [720p]", "https://cinejoy.to/720.m3u8", Qualities.P720.value)
         val vidup720 = createLink("vidup", "vidup [720p]", "https://vidup.to/720.m3u8", Qualities.P720.value)
-        val vidcore720 = createLink("vidcore", "vidcore [720p]", "https://vidcore.io/720.m3u8", Qualities.P720.value)
 
         // 1. VidLink 720p and 1080p arrive at t=0
         dispatcher.onLinkAccepted(vidlink720)
@@ -1334,25 +1338,25 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals("VidLink 720p should emit immediately", 1, emittedLinks.size)
         assertEquals(vidlink720, emittedLinks[0])
 
-        // 2. vidup 720p (rank 92) arrives at t=20ms (out of order before vidcore 95)
+        // 2. CineJoy 720p (rank 90) arrives at t=20ms (out of order before vidup 95)
         delay(20L)
-        dispatcher.onLinkAccepted(vidup720)
-        assertEquals("vidup 720p must be held in pendingTop720Links because vidcore (95) is pending", 1, emittedLinks.size)
+        dispatcher.onLinkAccepted(cinejoy720)
+        assertEquals("CineJoy 720p must be held in pendingTop720Links because vidup (95) is pending", 1, emittedLinks.size)
 
-        // 3. vidcore 720p (rank 95) arrives at t=50ms
+        // 3. vidup 720p (rank 95) arrives at t=50ms
         delay(30L)
-        dispatcher.onLinkAccepted(vidcore720)
-        assertEquals("vidcore 720p must emit and drain vidup 720p immediately in priority order", 3, emittedLinks.size)
-        assertEquals(vidcore720, emittedLinks[1])
-        assertEquals(vidup720, emittedLinks[2])
+        dispatcher.onLinkAccepted(vidup720)
+        assertEquals("vidup 720p must emit and drain CineJoy 720p immediately in priority order", 3, emittedLinks.size)
+        assertEquals(vidup720, emittedLinks[1])
+        assertEquals(cinejoy720, emittedLinks[2])
 
         // 4. Wait for top720GraceMs (150L) to expire, releasing 1080p
         delay(120L)
         assertEquals("VidLink 1080p must emit after top 720p grace period expires", 4, emittedLinks.size)
         assertEquals(vidlink1080, emittedLinks[3])
 
-        // Dispatched order must be VidLink 720p -> vidcore 720p -> vidup 720p -> VidLink 1080p
-        val expectedOrder = listOf(vidlink720, vidcore720, vidup720, vidlink1080)
+        // Dispatched order must be VidLink 720p -> vidup 720p -> CineJoy 720p -> VidLink 1080p
+        val expectedOrder = listOf(vidlink720, vidup720, cinejoy720, vidlink1080)
         assertEquals(expectedOrder, emittedLinks)
 
         dispatcher.flush()
@@ -1421,47 +1425,47 @@ class DualQualityAndSotaHierarchyTest {
 
         val vidlink720 = createLink("VidLink", "VidLink [720p]", "https://vidlink.pro/720.m3u8", Qualities.P720.value)
         val vidlink1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
-        val videasy720 = createLink("VidEasy", "VidEasy [720p]", "https://player.videasy.to/720.m3u8", Qualities.P720.value)
+        val moviebox720 = createLink("MovieBox", "MovieBox [720p]", "https://moviebox.com/720.m3u8", Qualities.P720.value)
+        val autoembed720 = createLink("AutoEmbed", "AutoEmbed [720p]", "https://player.autoembed.cc/720.m3u8", Qualities.P720.value)
+        val hexasu720 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/720.m3u8", Qualities.P720.value)
         val cinejoy720 = createLink("CineJoy", "CineJoy [720p]", "https://cinejoy.to/720.m3u8", Qualities.P720.value)
-        val rivestream720 = createLink("rivestream", "rivestream [720p]", "https://rivestream.org/720.m3u8", Qualities.P720.value)
         val vidup720 = createLink("vidup", "vidup [720p]", "https://vidup.to/720.m3u8", Qualities.P720.value)
-        val vidcore720 = createLink("vidcore", "vidcore [720p]", "https://vidcore.io/720.m3u8", Qualities.P720.value)
 
         // 1. VidLink finishes at t=0
         dispatcher.onLinkAccepted(vidlink720)
         dispatcher.onLinkAccepted(vidlink1080)
         assertEquals(1, emittedLinks.size)
 
-        // 2. VidEasy (rank 70) arrives at t=20ms (reversed order)
+        // 2. MovieBox (rank 80) arrives at t=20ms (reversed order)
         delay(20L)
-        dispatcher.onLinkAccepted(videasy720)
-        assertEquals("VidEasy 720p must be held", 1, emittedLinks.size)
+        dispatcher.onLinkAccepted(moviebox720)
+        assertEquals("MovieBox 720p must be held", 1, emittedLinks.size)
 
-        // 3. CineJoy (rank 88) arrives at t=40ms
+        // 3. AutoEmbed (rank 85) arrives at t=40ms
+        delay(20L)
+        dispatcher.onLinkAccepted(autoembed720)
+        assertEquals("AutoEmbed 85 and MovieBox 80 must be held", 1, emittedLinks.size)
+
+        // 4. HexaSU (rank 88) arrives at t=60ms
+        delay(20L)
+        dispatcher.onLinkAccepted(hexasu720)
+        assertEquals("HexaSU 88, AutoEmbed 85, MovieBox 80 must be held", 1, emittedLinks.size)
+
+        // 5. CineJoy (rank 90) arrives at t=80ms
         delay(20L)
         dispatcher.onLinkAccepted(cinejoy720)
-        assertEquals("CineJoy 88 and VidEasy 70 must be held", 1, emittedLinks.size)
+        assertEquals("CineJoy 90, HexaSU 88, AutoEmbed 85, MovieBox 80 held for vidup 95", 1, emittedLinks.size)
 
-        // 4. rivestream (rank 90) arrives at t=60ms
-        delay(20L)
-        dispatcher.onLinkAccepted(rivestream720)
-        assertEquals("rivestream 90, CineJoy 88, VidEasy 70 must be held", 1, emittedLinks.size)
-
-        // 5. vidup (rank 92) arrives at t=80ms
+        // 6. vidup (rank 95) arrives at t=100ms
         delay(20L)
         dispatcher.onLinkAccepted(vidup720)
-        assertEquals("vidup 92, rivestream 90, CineJoy 88, VidEasy 70 held for vidcore 95", 1, emittedLinks.size)
-
-        // 6. vidcore (rank 95) arrives at t=100ms
-        delay(20L)
-        dispatcher.onLinkAccepted(vidcore720)
-        // vidcore 95 arrives, so 95 emits, which cascades and unblocks 92, 90, 88, and 70!
-        assertEquals("vidcore 95 must emit, unblocking vidup 92, rivestream 90, CineJoy 88, and VidEasy 70 in exact rank order", 6, emittedLinks.size)
-        assertEquals(vidcore720, emittedLinks[1])
-        assertEquals(vidup720, emittedLinks[2])
-        assertEquals(rivestream720, emittedLinks[3])
-        assertEquals(cinejoy720, emittedLinks[4])
-        assertEquals(videasy720, emittedLinks[5])
+        // vidup 95 arrives, so 95 emits, which cascades and unblocks 90, 88, 85, and 80!
+        assertEquals("vidup 95 must emit, unblocking CineJoy 90, HexaSU 88, AutoEmbed 85, and MovieBox 80 in exact rank order", 6, emittedLinks.size)
+        assertEquals(vidup720, emittedLinks[1])
+        assertEquals(cinejoy720, emittedLinks[2])
+        assertEquals(hexasu720, emittedLinks[3])
+        assertEquals(autoembed720, emittedLinks[4])
+        assertEquals(moviebox720, emittedLinks[5])
 
         // 7. Wait for grace timer to release 1080p
         delay(180L)
@@ -1485,7 +1489,7 @@ class DualQualityAndSotaHierarchyTest {
         )
 
         val vidlink1080 = createLink("VidLink", "VidLink [1080p]", "https://vidlink.pro/1080.m3u8", Qualities.P1080.value)
-        val vidcore720 = createLink("vidcore", "vidcore [720p]", "https://vidcore.io/720.m3u8", Qualities.P720.value)
+        val vidup720 = createLink("vidup", "vidup [720p]", "https://vidup.to/720.m3u8", Qualities.P720.value)
 
         // VidLink only has 1080p, arrives at t=0
         dispatcher.onLinkAccepted(vidlink1080)
@@ -1494,11 +1498,11 @@ class DualQualityAndSotaHierarchyTest {
         assertEquals("VidLink 1080p emitted as topStream", 1, emittedLinks.size)
         assertEquals(vidlink1080, emittedLinks[0])
 
-        // Now vidcore arrives with 720p. Because VidLink (100) already emitted as topStream,
-        // vidcore (95) must NOT be blocked waiting for VidLink 720p!
-        dispatcher.onLinkAccepted(vidcore720)
-        assertEquals("vidcore 720p must emit immediately without waiting for rank 100", 2, emittedLinks.size)
-        assertEquals(vidcore720, emittedLinks[1])
+        // Now vidup arrives with 720p. Because VidLink (100) already emitted as topStream,
+        // vidup (95) must NOT be blocked waiting for VidLink 720p!
+        dispatcher.onLinkAccepted(vidup720)
+        assertEquals("vidup 720p must emit immediately without waiting for rank 100", 2, emittedLinks.size)
+        assertEquals(vidup720, emittedLinks[1])
 
         dispatcher.flush()
     }
@@ -1506,7 +1510,7 @@ class DualQualityAndSotaHierarchyTest {
     @Test
     fun testPriorityStreamDispatcherDisabledProviderDoesNotStallLowerRankSources() = runBlocking {
         val emittedLinks = mutableListOf<ExtractorLink>()
-        // VidLink (100) is DISABLED. Only vidcore (95), vidup (92), etc. are active
+        // VidLink (100) is DISABLED. Only vidup (95), CineJoy (90), HexaSU (88), AutoEmbed (85), MovieBox (80) are active
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
             upstreamCallback = { emittedLinks.add(it) },
             scope = this,
@@ -1514,25 +1518,25 @@ class DualQualityAndSotaHierarchyTest {
             subtitleGraceMs = 50L,
             topSourceGraceMs = 50L,
             top720GraceMs = 500L,
-            activeTopRanks = setOf(95, 92, 90, 88, 70)
+            activeTopRanks = setOf(95, 90, 88, 85, 80)
         )
 
-        val vidcore720 = createLink("vidcore", "vidcore [720p]", "https://vidcore.io/720.m3u8", Qualities.P720.value)
         val vidup720 = createLink("vidup", "vidup [720p]", "https://vidup.to/720.m3u8", Qualities.P720.value)
+        val cinejoy720 = createLink("CineJoy", "CineJoy [720p]", "https://cinejoy.to/720.m3u8", Qualities.P720.value)
 
         // Subtitles present
         dispatcher.onSubtitleReceived()
 
-        // vidcore 720p arrives at t=0. Because VidLink 100 is disabled, vidcore 95 is the top active rank
+        // vidup 720p arrives at t=0. Because VidLink 100 is disabled, vidup 95 is the top active rank
         // and must NOT be stalled waiting for rank 100!
-        dispatcher.onLinkAccepted(vidcore720)
-        assertEquals("vidcore 720p must emit immediately without waiting for disabled VidLink 100", 1, emittedLinks.size)
-        assertEquals(vidcore720, emittedLinks[0])
-
-        // vidup 720p arrives next. Since vidcore already emitted, vidup emits immediately
         dispatcher.onLinkAccepted(vidup720)
-        assertEquals("vidup 720p must emit immediately", 2, emittedLinks.size)
-        assertEquals(vidup720, emittedLinks[1])
+        assertEquals("vidup 720p must emit immediately without waiting for disabled VidLink 100", 1, emittedLinks.size)
+        assertEquals(vidup720, emittedLinks[0])
+
+        // CineJoy 720p arrives next. Since vidup already emitted, CineJoy emits immediately
+        dispatcher.onLinkAccepted(cinejoy720)
+        assertEquals("CineJoy 720p must emit immediately", 2, emittedLinks.size)
+        assertEquals(cinejoy720, emittedLinks[1])
 
         dispatcher.flush()
     }
@@ -1548,7 +1552,7 @@ class DualQualityAndSotaHierarchyTest {
             subtitleGraceMs = 50L,
             topSourceGraceMs = 50L,
             top720GraceMs = 1500L,
-            activeTopRanks = setOf(88, 70),
+            activeTopRanks = setOf(88, 80),
             isRankInFlight = { rank -> if (rank == 88) cinejoyInFlight else false }
         )
 
@@ -1704,49 +1708,53 @@ class DualQualityAndSotaHierarchyTest {
 
     @Test
     fun testSotaTopTierMonotonicityModernProviders() {
-        // Strict top-tier SOTA priority ordering: VidLink 100 > vidcore 95 > vidup 92 > rivestream 90 > CineJoy 88 > VidEasy 70
+        // Strict top-tier SOTA priority ordering: VidLink 100 > vidup 95 > CineJoy 90 > HexaSU 88 > AutoEmbed 85 > MovieBox 80
         val rVidlink = StreamLinkOptimizer.getSourcePriorityRank(createLink("VidLink", "VidLink", "https://vidlink.pro/v.m3u8"))
-        val rVidcore = StreamLinkOptimizer.getSourcePriorityRank(createLink("vidcore", "vidcore", "https://vidcore.io/v.m3u8"))
         val rVidup = StreamLinkOptimizer.getSourcePriorityRank(createLink("vidup", "vidup", "https://vidup.to/v.m3u8"))
-        val rRivestream = StreamLinkOptimizer.getSourcePriorityRank(createLink("rivestream", "rivestream", "https://rivestream.org/v.m3u8"))
         val rCinejoy = StreamLinkOptimizer.getSourcePriorityRank(createLink("CineJoy", "CineJoy", "https://cinejoy.to/v.m3u8"))
-        val rVideasy = StreamLinkOptimizer.getSourcePriorityRank(createLink("VidEasy", "VidEasy", "https://player.videasy.to/v.m3u8"))
+        val rHexa = StreamLinkOptimizer.getSourcePriorityRank(createLink("HexaSU", "HexaSU", "https://hexa.su/v.m3u8"))
+        val rAutoembed = StreamLinkOptimizer.getSourcePriorityRank(createLink("AutoEmbed", "AutoEmbed", "https://autoembed.cc/v.m3u8"))
+        val rMoviebox = StreamLinkOptimizer.getSourcePriorityRank(createLink("MovieBox", "MovieBox", "https://moviebox.com/v.m3u8"))
 
         assertEquals(100, rVidlink)
-        assertEquals(95, rVidcore)
-        assertEquals(92, rVidup)
-        assertEquals(90, rRivestream)
-        assertEquals(88, rCinejoy)
-        assertEquals(70, rVideasy)
+        assertEquals(95, rVidup)
+        assertEquals(90, rCinejoy)
+        assertEquals(88, rHexa)
+        assertEquals(85, rAutoembed)
+        assertEquals(80, rMoviebox)
 
-        assertTrue("VidLink > vidcore", rVidlink > rVidcore)
-        assertTrue("vidcore > vidup", rVidcore > rVidup)
-        assertTrue("vidup > rivestream", rVidup > rRivestream)
-        assertTrue("rivestream > CineJoy", rRivestream > rCinejoy)
-        assertTrue("CineJoy > VidEasy", rCinejoy > rVideasy)
+        assertTrue("VidLink > vidup", rVidlink > rVidup)
+        assertTrue("vidup > CineJoy", rVidup > rCinejoy)
+        assertTrue("CineJoy > HexaSU", rCinejoy > rHexa)
+        assertTrue("HexaSU > AutoEmbed", rHexa > rAutoembed)
+        assertTrue("AutoEmbed > MovieBox", rAutoembed > rMoviebox)
 
         // Verify FAST_PROVIDER_BOOST
         assertEquals(100f, FAST_PROVIDER_BOOST["vidlink"])
-        assertEquals(95f, FAST_PROVIDER_BOOST["vidcore"])
-        assertEquals(92f, FAST_PROVIDER_BOOST["vidup"])
-        assertEquals(90f, FAST_PROVIDER_BOOST["rivestream"])
-        assertEquals(88f, FAST_PROVIDER_BOOST["cinejoy"])
-        assertEquals(88f, FAST_PROVIDER_BOOST["CineJoy"])
-        assertEquals(70f, FAST_PROVIDER_BOOST["videasy"])
-        assertEquals(70f, FAST_PROVIDER_BOOST["VidEasy"])
+        assertEquals(95f, FAST_PROVIDER_BOOST["vidup"])
+        assertEquals(90f, FAST_PROVIDER_BOOST["cinejoy"])
+        assertEquals(90f, FAST_PROVIDER_BOOST["CineJoy"])
+        assertEquals(88f, FAST_PROVIDER_BOOST["hexasu"])
+        assertEquals(88f, FAST_PROVIDER_BOOST["HexaSU"])
+        assertEquals(85f, FAST_PROVIDER_BOOST["autoembed"])
+        assertEquals(85f, FAST_PROVIDER_BOOST["AutoEmbed"])
+        assertEquals(80f, FAST_PROVIDER_BOOST["moviebox"])
+        assertEquals(80f, FAST_PROVIDER_BOOST["MovieBox"])
 
         // Verify Latency Tier 1 classification
         assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("vidlink"))
-        assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("vidcore"))
         assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("vidup"))
-        assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("rivestream"))
         assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("cinejoy"))
-        assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("videasy"))
+        assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("HexaSU"))
+        assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("autoembed"))
+        assertEquals(LatencyTier.TIER_1, SpeculativePipeliner.classifyProvider("moviebox"))
+        assertEquals(LatencyTier.TIER_2, SpeculativePipeliner.classifyProvider("vegamovies"))
+        assertNull("vidcore must not exist in static cold start tiers", SpeculativePipeliner.STATIC_COLD_START_TIERS["vidcore"])
     }
 
     @Test
     fun testDualQualityExtremeTiebreakerDominance() {
-        // The lowest possible 720p top-tier stream (VidEasy 720p with 0 bitrate and no badges = 10,700.0f)
+        // The lowest possible 720p top-tier stream (MovieBox 720p with 0 bitrate and no badges = 10,800.0f)
         // must strictly outscore the highest possible 1080p stream (VidLink 1080p with max bitrate, Atmos, HDR = 9,009.9f)
         val max1080pVidlink = createLink(
             source = "VidLink",
@@ -1755,24 +1763,24 @@ class DualQualityAndSotaHierarchyTest {
             quality = Qualities.P1080.value,
             headers = mapOf("Origin" to "https://vidlink.pro", "Referer" to "https://vidlink.pro/")
         )
-        val min720pVideasy = createLink(
-            source = "VidEasy",
-            name = "VidEasy [720p]",
-            url = "https://player.videasy.to/stream/720p.m3u8",
+        val min720pMoviebox = createLink(
+            source = "MovieBox",
+            name = "MovieBox [720p]",
+            url = "https://moviebox.com/stream/720p.m3u8",
             quality = Qualities.P720.value
         )
 
         val scoreMax1080 = StreamLinkOptimizer.getStreamCompositeScore(max1080pVidlink)
-        val scoreMin720 = StreamLinkOptimizer.getStreamCompositeScore(min720pVideasy)
+        val scoreMin720 = StreamLinkOptimizer.getStreamCompositeScore(min720pMoviebox)
 
         assertTrue(
-            "Lowest top-tier 720p (VidEasy: $scoreMin720) must strictly beat highest top-tier 1080p (VidLink max tiebreaker: $scoreMax1080)",
+            "Lowest top-tier 720p (MovieBox: $scoreMin720) must strictly beat highest top-tier 1080p (VidLink max tiebreaker: $scoreMax1080)",
             scoreMin720 > scoreMax1080
         )
         assertTrue("Separation must exceed 1,500 points", (scoreMin720 - scoreMax1080) > 1500f)
 
         // Test every combination of top-tier providers: 720p always strictly beats 1080p
-        val providers = listOf("VidLink", "vidcore", "vidup", "rivestream", "CineJoy", "VidEasy")
+        val providers = listOf("VidLink", "vidup", "CineJoy", "HexaSU", "AutoEmbed", "MovieBox")
         for (p720 in providers) {
             val link720 = createLink(p720, "$p720 [720p]", "https://example.com/720.m3u8", Qualities.P720.value)
             val score720 = StreamLinkOptimizer.getStreamCompositeScore(link720)
@@ -1794,28 +1802,31 @@ class DualQualityAndSotaHierarchyTest {
     }
 
     @Test
-    fun testSettingsMigrationCleanInstallV11() {
+    fun testSettingsMigrationCleanInstallV12() {
         val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
         val disabled = getOrInitializeDisabledProviders(mockPrefs)
 
         val allProviders = buildProviders()
         val active = allProviders.map { it.id }.filterNot { disabled.contains(it) }.toSet()
 
-        assertEquals("Clean install v11 must activate exactly 6 top-tier providers", 6, active.size)
+        assertEquals("Clean install v12 must activate exactly 6 top-tier providers", 6, active.size)
         assertEquals(DEFAULT_TOP_TIER_PROVIDERS, active)
         assertTrue("vidlink must be active", active.contains("vidlink"))
-        assertTrue("vidcore must be active", active.contains("vidcore"))
         assertTrue("vidup must be active", active.contains("vidup"))
-        assertTrue("rivestream must be active", active.contains("rivestream"))
         assertTrue("cinejoy must be active", active.contains("cinejoy"))
-        assertTrue("VidEasy must be active", active.contains("VidEasy"))
+        assertTrue("HexaSU must be active", active.contains("HexaSU"))
+        assertTrue("autoembed must be active", active.contains("autoembed"))
+        assertTrue("moviebox must be active", active.contains("moviebox"))
 
         // Dead registered providers must be disabled
-        assertTrue("HexaSU must be disabled", disabled.contains("HexaSU"))
-        assertTrue("autoembed must be disabled", disabled.contains("autoembed"))
+        assertTrue("rivestream must be disabled", disabled.contains("rivestream"))
         assertTrue("vidfast must be disabled", disabled.contains("vidfast"))
+        assertTrue("VidEasy must be disabled", disabled.contains("VidEasy"))
+        assertTrue("superstream must be disabled", disabled.contains("superstream"))
+        assertTrue("vidcore must be disabled", disabled.contains("vidcore"))
         assertTrue("yflix must be disabled", disabled.contains("yflix"))
         assertTrue("vidsrc must be disabled", disabled.contains("vidsrc"))
+        assertFalse("HexaSU must NOT be disabled", disabled.contains("HexaSU"))
 
         assertTrue(mockPrefs.getBoolean(PREFS_TOP_TIER_INITIALIZED, false))
     }
@@ -1825,9 +1836,8 @@ class DualQualityAndSotaHierarchyTest {
         val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
         // Simulate legacy user who had:
         // 1. Explicitly disabled "vidlink" (a top-tier provider override)
-        // 2. Explicitly enabled "moviebox" (a secondary provider override)
-        // 3. vidfast and VidEasy were active under v7
-        val oldDisabled = (getDefaultDisabledProviderIds() + "vidlink") - "moviebox"
+        // 2. Explicitly enabled "yflix" (a secondary provider override)
+        val oldDisabled = (getDefaultDisabledProviderIds() + "vidlink") - "yflix"
         mockPrefs.edit()
             .putStringSet("disabled_providers", oldDisabled)
             .putBoolean("streamplay_top_tier_v9_initialized", true)
@@ -1836,24 +1846,24 @@ class DualQualityAndSotaHierarchyTest {
         val finalDisabled = getOrInitializeDisabledProviders(mockPrefs)
 
         // Dead providers must be purged and added to disabled_providers
-        assertTrue("HexaSU must be disabled in v11", finalDisabled.contains("HexaSU"))
-        assertTrue("autoembed must be disabled in v11", finalDisabled.contains("autoembed"))
-        assertTrue("superstream must be disabled in v11", finalDisabled.contains("superstream"))
-        assertTrue("vaplayer must be disabled in v11", finalDisabled.contains("vaplayer"))
-        assertTrue("vidfast must be disabled in v11", finalDisabled.contains("vidfast"))
-        assertTrue("yflix must be disabled in v11", finalDisabled.contains("yflix"))
-        assertTrue("vidsrc must be disabled in v11", finalDisabled.contains("vidsrc"))
+        assertTrue("rivestream must be disabled in v14", finalDisabled.contains("rivestream"))
+        assertTrue("vidfast must be disabled in v14", finalDisabled.contains("vidfast"))
+        assertTrue("VidEasy must be disabled in v14", finalDisabled.contains("VidEasy"))
+        assertTrue("superstream must be disabled in v14", finalDisabled.contains("superstream"))
+        assertTrue("vaplayer must be disabled in v14", finalDisabled.contains("vaplayer"))
+        assertTrue("vidcore must be disabled in v14", finalDisabled.contains("vidcore"))
+        assertTrue("vidsrc must be disabled in v14", finalDisabled.contains("vidsrc"))
 
         // Newly promoted SOTA providers must be enabled
-        assertFalse("vidcore must be enabled in v11", finalDisabled.contains("vidcore"))
-        assertFalse("vidup must be enabled in v11", finalDisabled.contains("vidup"))
-        assertFalse("rivestream must be enabled in v11", finalDisabled.contains("rivestream"))
-        assertFalse("cinejoy must be enabled in v11", finalDisabled.contains("cinejoy"))
-        assertFalse("VidEasy must be enabled in v11", finalDisabled.contains("VidEasy"))
+        assertFalse("vidup must be enabled in v14", finalDisabled.contains("vidup"))
+        assertFalse("HexaSU must be enabled in v14", finalDisabled.contains("HexaSU"))
+        assertFalse("autoembed must be enabled in v14", finalDisabled.contains("autoembed"))
+        assertFalse("moviebox must be enabled in v14", finalDisabled.contains("moviebox"))
+        assertFalse("cinejoy must be enabled in v14", finalDisabled.contains("cinejoy"))
 
         // User custom overrides MUST be strictly preserved
         assertTrue("User's custom disable of vidlink must be preserved", finalDisabled.contains("vidlink"))
-        assertFalse("User's custom enable of moviebox must be preserved", finalDisabled.contains("moviebox"))
+        assertFalse("User's custom enable of yflix must be preserved", finalDisabled.contains("yflix"))
         assertTrue(mockPrefs.getBoolean(PREFS_TOP_TIER_INITIALIZED, false))
     }
 
@@ -1914,7 +1924,7 @@ class DualQualityAndSotaHierarchyTest {
     @Test
     fun testPriorityStreamDispatcherModernSotaFullPipeline() = runBlocking {
         val emittedLinks = mutableListOf<ExtractorLink>()
-        val inFlightRanks = mutableSetOf(90, 88, 70)
+        val inFlightRanks = mutableSetOf(90, 88, 80)
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
             upstreamCallback = { emittedLinks.add(it) },
             scope = this,
@@ -1922,45 +1932,45 @@ class DualQualityAndSotaHierarchyTest {
             subtitleGraceMs = 50L,
             topSourceGraceMs = 50L,
             top720GraceMs = 1500L,
-            activeTopRanks = setOf(90, 88, 70),
+            activeTopRanks = setOf(90, 88, 80),
             isRankInFlight = { rank -> inFlightRanks.contains(rank) }
         )
 
-        val videasy1080 = createLink("VidEasy", "VidEasy [1080p]", "https://player.videasy.to/1080.m3u8", Qualities.P1080.value)
-        val videasy720 = createLink("VidEasy", "VidEasy [720p]", "https://player.videasy.to/720.m3u8", Qualities.P720.value)
+        val moviebox1080 = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.com/1080.m3u8", Qualities.P1080.value)
+        val moviebox720 = createLink("MovieBox", "MovieBox [720p]", "https://moviebox.com/720.m3u8", Qualities.P720.value)
+        val hexasu720 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/720.m3u8", Qualities.P720.value)
         val cinejoy720 = createLink("CineJoy", "CineJoy [720p]", "https://cinejoy.to/720.m3u8", Qualities.P720.value)
-        val rivestream720 = createLink("rivestream", "rivestream [720p]", "https://rivestream.org/720.m3u8", Qualities.P720.value)
 
         // Subtitles arrive
         dispatcher.onSubtitleReceived()
 
-        // 1. VidEasy emits 1080p at t=0, but higher-priority 720p sources (ranks 90, 88) are in flight
-        dispatcher.onLinkAccepted(videasy1080)
+        // 1. MovieBox emits 1080p at t=0, but higher-priority 720p sources (ranks 90, 88) are in flight
+        dispatcher.onLinkAccepted(moviebox1080)
         delay(80L)
         // Held in pending1080Links because higher-priority sources are in flight
-        assertTrue("VidEasy 1080p held while higher-ranked 720p sources are in-flight", emittedLinks.isEmpty())
+        assertTrue("MovieBox 1080p held while higher-ranked 720p sources are in-flight", emittedLinks.isEmpty())
 
-        // 2. VidEasy 720p arrives at t=100ms
-        dispatcher.onLinkAccepted(videasy720)
-        inFlightRanks.remove(70)
-        dispatcher.markRankCompleted(70)
+        // 2. MovieBox 720p arrives at t=100ms
+        dispatcher.onLinkAccepted(moviebox720)
+        inFlightRanks.remove(80)
+        dispatcher.markRankCompleted(80)
 
-        // 3. CineJoy 720p arrives at t=120ms
-        dispatcher.onLinkAccepted(cinejoy720)
+        // 3. HexaSU 720p arrives at t=120ms
+        dispatcher.onLinkAccepted(hexasu720)
         inFlightRanks.remove(88)
         dispatcher.markRankCompleted(88)
 
-        // 4. rivestream 720p arrives at t=140ms
-        dispatcher.onLinkAccepted(rivestream720)
+        // 4. CineJoy 720p arrives at t=140ms
+        dispatcher.onLinkAccepted(cinejoy720)
         inFlightRanks.remove(90)
         dispatcher.markRankCompleted(90)
 
         // All 720p streams emit in strict rank order ahead of 1080p, followed immediately by 1080p
         assertEquals("All 4 streams must emit in strict rank and quality order", 4, emittedLinks.size)
-        assertEquals("Priority #1 must be rivestream 720p", rivestream720, emittedLinks[0])
-        assertEquals("Priority #2 must be CineJoy 720p", cinejoy720, emittedLinks[1])
-        assertEquals("Priority #3 must be VidEasy 720p", videasy720, emittedLinks[2])
-        assertEquals("Priority #4 must be VidEasy 1080p", videasy1080, emittedLinks[3])
+        assertEquals("Priority #1 must be CineJoy 720p", cinejoy720, emittedLinks[0])
+        assertEquals("Priority #2 must be HexaSU 720p", hexasu720, emittedLinks[1])
+        assertEquals("Priority #3 must be MovieBox 720p", moviebox720, emittedLinks[2])
+        assertEquals("Priority #4 must be MovieBox 1080p", moviebox1080, emittedLinks[3])
 
         dispatcher.flush()
     }

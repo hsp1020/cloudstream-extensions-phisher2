@@ -44,11 +44,11 @@ class StreamPlayTopTierSourceHierarchyTest {
     fun testDefinitiveTopTierSourcesOrderAndRegistration() {
         val expectedOrder = listOf(
             "vidlink",
-            "vidcore",
             "vidup",
-            "rivestream",
             "cinejoy",
-            "VidEasy"
+            "HexaSU",
+            "autoembed",
+            "moviebox"
         )
         val expectedSet = expectedOrder.toSet()
 
@@ -64,14 +64,27 @@ class StreamPlayTopTierSourceHierarchyTest {
             assertTrue("Provider '$providerId' must be registered", providerMap.containsKey(providerId))
         }
 
-        // 3. Verify SuperStream is NOT registered
+        // 3. Verify SuperStream and dead providers are NOT registered
         assertFalse("SuperStream must NOT be registered in buildProviders()", providerMap.containsKey("superstream"))
+        assertFalse("rivestream must NOT be registered in buildProviders()", providerMap.containsKey("rivestream"))
+        assertFalse("vidfast must NOT be registered in buildProviders()", providerMap.containsKey("vidfast"))
+        assertFalse("VidEasy must NOT be registered in buildProviders()", providerMap.containsKey("VidEasy"))
 
         // 4. Verify SOTA provider details
-        val vidcore = providerMap["vidcore"]
-        assertNotNull("Vidcore provider must exist", vidcore)
-        assertEquals("Vidcore", vidcore?.name)
-        assertEquals(ProviderKind.VIDEO, vidcore?.kind)
+        val hexasu = providerMap["HexaSU"]
+        assertNotNull("HexaSU provider must exist", hexasu)
+        assertEquals("HexaSU", hexasu?.name)
+        assertEquals(ProviderKind.VIDEO, hexasu?.kind)
+
+        val autoembed = providerMap["autoembed"]
+        assertNotNull("AutoEmbed provider must exist", autoembed)
+        assertEquals("AutoEmbed", autoembed?.name)
+        assertEquals(ProviderKind.VIDEO, autoembed?.kind)
+
+        val moviebox = providerMap["moviebox"]
+        assertNotNull("MovieBox provider must exist", moviebox)
+        assertEquals("MovieBox (Multi)", moviebox?.name)
+        assertEquals(ProviderKind.VIDEO, moviebox?.kind)
 
         val vidup = providerMap["vidup"]
         assertNotNull("Vidup provider must exist", vidup)
@@ -96,7 +109,7 @@ class StreamPlayTopTierSourceHierarchyTest {
     }
 
     @Test
-    fun testVaplayerAndSuperStreamAreCompletelyAbsent() {
+    fun testVidcoreVaplayerAndSuperStreamAreCompletelyAbsent() {
         val allProviders = buildProviders()
         val vaplayer = allProviders.find {
             it.id.equals("vaplayer", ignoreCase = true) || it.name.equals("Vaplayer", ignoreCase = true)
@@ -110,10 +123,19 @@ class StreamPlayTopTierSourceHierarchyTest {
         assertNull("SuperStream must be completely absent from providers list", superstream)
         assertFalse("SuperStream must not be in default top tier providers", DEFAULT_TOP_TIER_PROVIDERS.contains("superstream"))
 
+        val vidcore = allProviders.find {
+            it.id.equals("vidcore", ignoreCase = true) || it.name.equals("Vidcore", ignoreCase = true)
+        }
+        assertNull("Vidcore must be completely absent from providers list", vidcore)
+        assertFalse("Vidcore must not be in default top tier providers", DEFAULT_TOP_TIER_PROVIDERS.contains("vidcore"))
+
         assertNull("Vaplayer must not have an entry in FAST_PROVIDER_BOOST", FAST_PROVIDER_BOOST["vaplayer"])
         assertNull("SuperStream must not have an entry in FAST_PROVIDER_BOOST", FAST_PROVIDER_BOOST["superstream"])
+        assertNull("Vidcore must not have an entry in FAST_PROVIDER_BOOST", FAST_PROVIDER_BOOST["vidcore"])
         assertNull("Vaplayer must not exist in static cold start tiers", SpeculativePipeliner.STATIC_COLD_START_TIERS["vaplayer"])
         assertNull("Superstream must not exist in static cold start tiers", SpeculativePipeliner.STATIC_COLD_START_TIERS["superstream"])
+        assertNull("Vidcore must not exist in static cold start tiers", SpeculativePipeliner.STATIC_COLD_START_TIERS["vidcore"])
+        assertTrue("Vidcore must be in DEAD_PROVIDER_IDS", DEAD_PROVIDER_IDS.contains("vidcore"))
     }
 
     @Test
@@ -134,7 +156,7 @@ class StreamPlayTopTierSourceHierarchyTest {
 
     @Test
     fun testColdStartLatencyTiersMatchPriority() {
-        val topTierSources = listOf("vidlink", "vidcore", "vidup", "rivestream", "cinejoy", "VidEasy")
+        val topTierSources = listOf("vidlink", "vidup", "rivestream", "cinejoy", "vidfast", "VidEasy")
 
         for (source in topTierSources) {
             val tier = SpeculativePipeliner.STATIC_COLD_START_TIERS[source]
@@ -147,113 +169,121 @@ class StreamPlayTopTierSourceHierarchyTest {
     @Test
     fun testFastProviderBoostStrictRankOrder() {
         val vidlinkBoost = FAST_PROVIDER_BOOST["vidlink"] ?: 0f
-        val vidcoreBoost = FAST_PROVIDER_BOOST["vidcore"] ?: 0f
         val vidupBoost = FAST_PROVIDER_BOOST["vidup"] ?: 0f
-        val rivestreamBoost = FAST_PROVIDER_BOOST["rivestream"] ?: 0f
         val cinejoyBoost = FAST_PROVIDER_BOOST["cinejoy"] ?: 0f
-        val videasyBoost = FAST_PROVIDER_BOOST["VidEasy"] ?: 0f
+        val hexasuBoost = FAST_PROVIDER_BOOST["hexasu"] ?: 0f
+        val autoembedBoost = FAST_PROVIDER_BOOST["autoembed"] ?: 0f
+        val movieboxBoost = FAST_PROVIDER_BOOST["moviebox"] ?: 0f
         val superstreamBoost = FAST_PROVIDER_BOOST["superstream"]
 
         assertNull("SuperStream must not have an entry in FAST_PROVIDER_BOOST", superstreamBoost)
 
         // Check exact target scores
         assertEquals(100f, vidlinkBoost, 0.001f)
-        assertEquals(95f, vidcoreBoost, 0.001f)
-        assertEquals(92f, vidupBoost, 0.001f)
-        assertEquals(90f, rivestreamBoost, 0.001f)
-        assertEquals(88f, cinejoyBoost, 0.001f)
-        assertEquals(70f, videasyBoost, 0.001f)
+        assertEquals(95f, vidupBoost, 0.001f)
+        assertEquals(90f, cinejoyBoost, 0.001f)
+        assertEquals(88f, hexasuBoost, 0.001f)
+        assertEquals(85f, autoembedBoost, 0.001f)
+        assertEquals(80f, movieboxBoost, 0.001f)
 
-        // Strict monotonicity check: VidLink > Vidcore > Vidup > RiveStream > CineJoy > VidEasy
-        assertTrue(vidlinkBoost > vidcoreBoost)
-        assertTrue(vidcoreBoost > vidupBoost)
-        assertTrue(vidupBoost > rivestreamBoost)
-        assertTrue(rivestreamBoost > cinejoyBoost)
-        assertTrue(cinejoyBoost > videasyBoost)
+        // Strict monotonicity check: VidLink > Vidup > CineJoy > HexaSU > AutoEmbed > MovieBox
+        assertTrue(vidlinkBoost > vidupBoost)
+        assertTrue(vidupBoost > cinejoyBoost)
+        assertTrue(cinejoyBoost > hexasuBoost)
+        assertTrue(hexasuBoost > autoembedBoost)
+        assertTrue(autoembedBoost > movieboxBoost)
 
-        // Secondary providers must never outrank top-tier providers (must be < 70f)
-        val secondaryProviders = listOf("vidsrcxyz", "moviesapi", "moviebox", "vidzeeapi", "2Embed")
+        // Secondary providers must never outrank top-tier providers (must be < 80f)
+        val secondaryProviders = listOf("vidsrcxyz", "moviesapi", "vidzeeapi", "2Embed", "vidrock")
         for (sec in secondaryProviders) {
             val secBoost = FAST_PROVIDER_BOOST[sec] ?: 0f
-            assertTrue("Secondary provider '$sec' ($secBoost) must be strictly lower than VidEasy ($videasyBoost)", secBoost < videasyBoost)
+            assertTrue("Secondary provider '$sec' ($secBoost) must be strictly lower than MovieBox ($movieboxBoost)", secBoost < movieboxBoost)
         }
     }
 
     @Test
     fun testStreamLinkOptimizerSourcePriorityRanks() {
         val vidlinkLink = createLink("Vidlink", "Vidlink [1080p]", "https://vidlink.pro/stream/master.m3u8", type = ExtractorLinkType.M3U8)
+        val vidupLink = createLink("Vidup", "Vidup [1080p]", "https://vidup.to/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val cinejoyLink = createLink("CineJoy", "CineJoy [1080p]", "https://cinejoy.to/stream.m3u8", type = ExtractorLinkType.M3U8)
         val hexaLink = createLink("HexaSU", "HexaSU Server 1 [1080p]", "https://hexa.su/stream.m3u8", type = ExtractorLinkType.M3U8)
         val embedSuLink = createLink("HexaSU", "HexaSU Server 2 [1080p]", "https://embed.su/stream.m3u8", type = ExtractorLinkType.M3U8)
         val autoembedLink = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val vidfastLink = createLink("VidFast", "VidFast Server 1 [1080p]", "https://vidfast.pro/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val videasyLink = createLink("VidEasy", "VidEasy [1080p]", "https://api.videasy.net/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val movieboxLink = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.com/stream.m3u8", type = ExtractorLinkType.M3U8)
         val secondaryLink = createLink("UnknownProvider", "Scraped Link [1080p]", "https://secondary.example.com/video.mp4")
 
         val rVidlink = StreamLinkOptimizer.getSourcePriorityRank(vidlinkLink)
+        val rVidup = StreamLinkOptimizer.getSourcePriorityRank(vidupLink)
+        val rCinejoy = StreamLinkOptimizer.getSourcePriorityRank(cinejoyLink)
         val rHexa = StreamLinkOptimizer.getSourcePriorityRank(hexaLink)
         val rEmbedSu = StreamLinkOptimizer.getSourcePriorityRank(embedSuLink)
         val rAutoembed = StreamLinkOptimizer.getSourcePriorityRank(autoembedLink)
-        val rVidfast = StreamLinkOptimizer.getSourcePriorityRank(vidfastLink)
-        val rVideasy = StreamLinkOptimizer.getSourcePriorityRank(videasyLink)
+        val rMoviebox = StreamLinkOptimizer.getSourcePriorityRank(movieboxLink)
         val rSecondary = StreamLinkOptimizer.getSourcePriorityRank(secondaryLink)
 
         // Strict hierarchy check
         assertEquals("VidLink rank is 100", 100, rVidlink)
-        assertEquals("VidEasy rank is 70", 70, rVideasy)
-        assertEquals("HexaSU rank is 45", 45, rHexa)
-        assertEquals("embed.su has same rank as HexaSU (45)", 45, rEmbedSu)
-        assertEquals("AutoEmbed rank is 40", 40, rAutoembed)
-        assertEquals("VidFast rank is 30", 30, rVidfast)
+        assertEquals("Vidup rank is 95", 95, rVidup)
+        assertEquals("CineJoy rank is 90", 90, rCinejoy)
+        assertEquals("HexaSU rank is 88", 88, rHexa)
+        assertEquals("embed.su has same rank as HexaSU (88)", 88, rEmbedSu)
+        assertEquals("AutoEmbed rank is 85", 85, rAutoembed)
+        assertEquals("MovieBox rank is 80", 80, rMoviebox)
 
-        assertTrue("Vidlink ($rVidlink) > VidEasy ($rVideasy)", rVidlink > rVideasy)
-        assertTrue("VidEasy ($rVideasy) > HexaSU ($rHexa)", rVideasy > rHexa)
+        assertTrue("Vidlink ($rVidlink) > Vidup ($rVidup)", rVidlink > rVidup)
+        assertTrue("Vidup ($rVidup) > CineJoy ($rCinejoy)", rVidup > rCinejoy)
+        assertTrue("CineJoy ($rCinejoy) > HexaSU ($rHexa)", rCinejoy > rHexa)
         assertTrue("HexaSU ($rHexa) > AutoEmbed ($rAutoembed)", rHexa > rAutoembed)
-        assertTrue("AutoEmbed ($rAutoembed) > VidFast ($rVidfast)", rAutoembed > rVidfast)
-        assertTrue("VidFast ($rVidfast) > Secondary ($rSecondary)", rVidfast > rSecondary)
+        assertTrue("AutoEmbed ($rAutoembed) > MovieBox ($rMoviebox)", rAutoembed > rMoviebox)
+        assertTrue("MovieBox ($rMoviebox) > Secondary ($rSecondary)", rMoviebox > rSecondary)
     }
 
     @Test
     fun testIsBetterThanPrefersTopTierDirectStreams() {
         val vidlinkStream = createLink("Vidlink", "Vidlink [1080p]", "https://vidlink.pro/stream/master.m3u8", type = ExtractorLinkType.M3U8)
+        val vidupStream = createLink("Vidup", "Vidup [1080p]", "https://vidup.to/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val cinejoyStream = createLink("CineJoy", "CineJoy [1080p]", "https://cinejoy.to/stream.m3u8", type = ExtractorLinkType.M3U8)
         val hexaStream = createLink("HexaSU", "HexaSU [1080p]", "https://theemoviedb.hexa.su/stream.m3u8", type = ExtractorLinkType.M3U8)
         val autoembedStream = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val vidfastStream = createLink("VidFast", "VidFast [1080p]", "https://vidfast.pro/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val videasyStream = createLink("VidEasy", "VidEasy [1080p]", "https://api.videasy.net/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val movieboxStream = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.com/stream.m3u8", type = ExtractorLinkType.M3U8)
 
-        // Vidlink beats VidEasy
-        assertTrue("Vidlink beats VidEasy", StreamLinkOptimizer.isBetterThan(vidlinkStream, videasyStream))
-        assertFalse("VidEasy does not beat Vidlink", StreamLinkOptimizer.isBetterThan(videasyStream, vidlinkStream))
+        // Vidlink beats Vidup
+        assertTrue("Vidlink beats Vidup", StreamLinkOptimizer.isBetterThan(vidlinkStream, vidupStream))
+        assertFalse("Vidup does not beat Vidlink", StreamLinkOptimizer.isBetterThan(vidupStream, vidlinkStream))
 
-        // VidEasy beats HexaSU
-        assertTrue("VidEasy beats HexaSU", StreamLinkOptimizer.isBetterThan(videasyStream, hexaStream))
-        assertFalse("HexaSU does not beat VidEasy", StreamLinkOptimizer.isBetterThan(hexaStream, videasyStream))
+        // Vidup beats CineJoy
+        assertTrue("Vidup beats CineJoy", StreamLinkOptimizer.isBetterThan(vidupStream, cinejoyStream))
+        assertFalse("CineJoy does not beat Vidup", StreamLinkOptimizer.isBetterThan(cinejoyStream, vidupStream))
+
+        // CineJoy beats HexaSU
+        assertTrue("CineJoy beats HexaSU", StreamLinkOptimizer.isBetterThan(cinejoyStream, hexaStream))
+        assertFalse("HexaSU does not beat CineJoy", StreamLinkOptimizer.isBetterThan(hexaStream, cinejoyStream))
 
         // HexaSU beats AutoEmbed
         assertTrue("HexaSU beats AutoEmbed", StreamLinkOptimizer.isBetterThan(hexaStream, autoembedStream))
         assertFalse("AutoEmbed does not beat HexaSU", StreamLinkOptimizer.isBetterThan(autoembedStream, hexaStream))
 
-        // AutoEmbed beats VidFast
-        assertTrue("AutoEmbed beats VidFast", StreamLinkOptimizer.isBetterThan(autoembedStream, vidfastStream))
-        assertFalse("VidFast does not beat AutoEmbed", StreamLinkOptimizer.isBetterThan(vidfastStream, autoembedStream))
+        // AutoEmbed beats MovieBox
+        assertTrue("AutoEmbed beats MovieBox", StreamLinkOptimizer.isBetterThan(autoembedStream, movieboxStream))
+        assertFalse("MovieBox does not beat AutoEmbed", StreamLinkOptimizer.isBetterThan(movieboxStream, autoembedStream))
     }
 
     @Test
     fun testTopTierSourceTakesPrecedenceOverVideoScrapeBadges() {
-        val videasyPlain = createLink("VidEasy", "VidEasy [1080p]", "https://api.videasy.net/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val movieboxPlain = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.com/stream.m3u8", type = ExtractorLinkType.M3U8)
         val secondaryRemux = createLink("SecondaryScraper", "SecondaryScraper [REMUX] [1080p]", "https://secondary.com/video.mp4")
 
-        assertTrue("VidEasy beats Secondary even with [REMUX] badge", StreamLinkOptimizer.isBetterThan(videasyPlain, secondaryRemux))
-        assertFalse("Secondary [REMUX] does not beat VidEasy", StreamLinkOptimizer.isBetterThan(secondaryRemux, videasyPlain))
+        assertTrue("MovieBox beats Secondary even with [REMUX] badge", StreamLinkOptimizer.isBetterThan(movieboxPlain, secondaryRemux))
+        assertFalse("Secondary [REMUX] does not beat MovieBox", StreamLinkOptimizer.isBetterThan(secondaryRemux, movieboxPlain))
 
-        // AutoEmbed beats VidFast even if VidFast has [WEB-DL]
-        val autoembedPlain = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val vidfastWebDl = createLink("VidFast", "VidFast [WEB-DL] [1080p]", "https://vidfast.pro/stream.m3u8", type = ExtractorLinkType.M3U8)
-        assertTrue("AutoEmbed beats VidFast with [WEB-DL]", StreamLinkOptimizer.isBetterThan(autoembedPlain, vidfastWebDl))
+        // HexaSU beats AutoEmbed even if AutoEmbed has [WEB-DL]
+        val hexaPlain = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val autoembedWebDl = createLink("AutoEmbed", "AutoEmbed [WEB-DL] [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
+        assertTrue("HexaSU beats AutoEmbed with [WEB-DL]", StreamLinkOptimizer.isBetterThan(hexaPlain, autoembedWebDl))
 
-        // VidEasy beats VidFast even if VidFast has [WEB-DL]
-        val vidfastPlain = createLink("VidFast", "VidFast [1080p]", "https://vidfast.pro/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val videasyWebDl = createLink("VidEasy", "VidEasy [WEB-DL] [1080p]", "https://api.videasy.net/stream.m3u8", type = ExtractorLinkType.M3U8)
-        assertTrue("VidEasy beats VidFast with [WEB-DL]", StreamLinkOptimizer.isBetterThan(videasyWebDl, vidfastPlain))
+        // AutoEmbed beats MovieBox even if MovieBox has [WEB-DL]
+        val movieboxWebDl = createLink("MovieBox", "MovieBox [WEB-DL] [1080p]", "https://moviebox.com/stream.m3u8", type = ExtractorLinkType.M3U8)
+        assertTrue("AutoEmbed beats MovieBox with [WEB-DL]", StreamLinkOptimizer.isBetterThan(autoembedWebDl, movieboxWebDl))
     }
 
     @Test
@@ -283,8 +313,8 @@ class StreamPlayTopTierSourceHierarchyTest {
     @Test
     fun testMigrationForUpgradingUserEnablesAutoembedAndDisablesSuperStream() {
         val mockPrefs = ProviderTelemetryAndCircuitBreakerTest.MockSharedPreferences()
-        // Simulate legacy user who had old defaults initialized (vidfast, VidEasy, yflix, vidsrc present, vidcore & vidup disabled)
-        val oldDisabled = getDefaultDisabledProviderIds() + "vidcore" + "vidup"
+        // Simulate legacy user who had old defaults initialized (HexaSU, autoembed, yflix, vidsrc present, vidcore & vidup disabled)
+        val oldDisabled = getDefaultDisabledProviderIds() + "HexaSU" + "vidup"
         mockPrefs.edit()
             .putStringSet("disabled_providers", oldDisabled)
             .putBoolean("streamplay_top5_defaults_initialized", true)
@@ -297,17 +327,18 @@ class StreamPlayTopTierSourceHierarchyTest {
         val active = allProviders.map { it.id }.filterNot { finalDisabled.contains(it) }.toSet()
 
         // SOTA providers must be enabled (removed from disabled_providers)
-        assertFalse("vidcore must not be disabled after migration", finalDisabled.contains("vidcore"))
+        assertFalse("HexaSU must not be disabled after migration", finalDisabled.contains("HexaSU"))
         assertFalse("vidup must not be disabled after migration", finalDisabled.contains("vidup"))
-        assertFalse("rivestream must not be disabled after migration", finalDisabled.contains("rivestream"))
+        assertFalse("autoembed must not be disabled after migration", finalDisabled.contains("autoembed"))
         assertFalse("cinejoy must not be disabled after migration", finalDisabled.contains("cinejoy"))
-        assertFalse("VidEasy must not be disabled after migration", finalDisabled.contains("VidEasy"))
+        assertFalse("moviebox must not be disabled after migration", finalDisabled.contains("moviebox"))
         // Dead providers must be explicitly disabled in migration
-        assertTrue("AutoEmbed must be in disabled_providers after migration", finalDisabled.contains("autoembed"))
-        assertTrue("HexaSU must be in disabled_providers after migration", finalDisabled.contains("HexaSU"))
+        assertTrue("vidcore must be in disabled_providers after migration", finalDisabled.contains("vidcore"))
+        assertTrue("rivestream must be in disabled_providers after migration", finalDisabled.contains("rivestream"))
+        assertTrue("vidfast must be in disabled_providers after migration", finalDisabled.contains("vidfast"))
+        assertTrue("VidEasy must be in disabled_providers after migration", finalDisabled.contains("VidEasy"))
         assertTrue("SuperStream must be in disabled_providers after migration", finalDisabled.contains("superstream"))
         assertTrue("vaplayer must be in disabled_providers after migration", finalDisabled.contains("vaplayer"))
-        assertTrue("vidfast must be in disabled_providers after migration", finalDisabled.contains("vidfast"))
         assertTrue("yflix must be in disabled_providers after migration", finalDisabled.contains("yflix"))
         assertTrue("vidsrc must be in disabled_providers after migration", finalDisabled.contains("vidsrc"))
         assertEquals("All 6 top-tier providers must be active after migration", DEFAULT_TOP_TIER_PROVIDERS, active)
@@ -351,7 +382,7 @@ class StreamPlayTopTierSourceHierarchyTest {
             assertEquals("https://vidfast.vc", downloadHeaders["Origin"])
 
             val link = createLink("UnknownSource", "Stream 1080p", host, type = ExtractorLinkType.M3U8)
-            assertEquals("Peakstorm/Hypergate streams must be recognized as VidFast tier (30)", 30, StreamLinkOptimizer.getSourcePriorityRank(link))
+            assertEquals("Peakstorm/Hypergate streams must be recognized as VidFast tier (65)", 65, StreamLinkOptimizer.getSourcePriorityRank(link))
         }
     }
 
@@ -380,9 +411,9 @@ class StreamPlayTopTierSourceHierarchyTest {
         val controller = EarlySatisfactionController(config)
         assertEquals(0f, controller.getMaxEmittedPriority(), 0.001f)
 
-        val vidfastLink = createLink("VidFast", "VidFast [1080p]", "https://vidfast.vc/stream.m3u8", type = ExtractorLinkType.M3U8)
-        controller.onLinkEmitted(vidfastLink)
-        assertEquals(30f, controller.getMaxEmittedPriority(), 0.001f)
+        val autoembedLink = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
+        controller.onLinkEmitted(autoembedLink)
+        assertEquals(85f, controller.getMaxEmittedPriority(), 0.001f)
 
         val vidlinkLink = createLink("Vidlink", "Vidlink [1080p]", "https://hakunaymatata.com/stream.mp4", type = ExtractorLinkType.VIDEO)
         controller.onLinkEmitted(vidlinkLink)
@@ -411,7 +442,7 @@ class StreamPlayTopTierSourceHierarchyTest {
             assertEquals("https://www.cineby.sc", downloadHeaders["Origin"])
 
             val link = createLink("UnknownSource", "Stream 1080p", host, type = ExtractorLinkType.M3U8)
-            assertEquals("Videasy/Cineby streams must be recognized as VidEasy tier (70)", 70, StreamLinkOptimizer.getSourcePriorityRank(link))
+            assertEquals("Videasy/Cineby streams must be recognized as VidEasy tier (60)", 60, StreamLinkOptimizer.getSourcePriorityRank(link))
         }
     }
 
@@ -419,39 +450,38 @@ class StreamPlayTopTierSourceHierarchyTest {
     fun testHexaWordMatchesHexaTier() {
         val link1 = createLink("Hexa", "Hexa Server 1 [1080p]", "https://example.com/stream.m3u8", type = ExtractorLinkType.M3U8)
         val link2 = createLink("HexaSU", "HexaSU [1080p]", "https://example.com/stream.m3u8", type = ExtractorLinkType.M3U8)
-        assertEquals(45, StreamLinkOptimizer.getSourcePriorityRank(link1))
-        assertEquals(45, StreamLinkOptimizer.getSourcePriorityRank(link2))
+        assertEquals(88, StreamLinkOptimizer.getSourcePriorityRank(link1))
+        assertEquals(88, StreamLinkOptimizer.getSourcePriorityRank(link2))
     }
 
     @Test
-    fun testAutoembedStrictlyDominatesVidfastEvenWithBitrateTags() {
-        val autoembedStream = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val vidfastWithBitrate = createLink("VidFast", "VidFast [1080p] (4500 kbps)", "https://vidfast.vc/stream.m3u8", type = ExtractorLinkType.M3U8)
+    fun testAutoembedStrictlyDominatesMovieboxAndVidfastEvenWithBitrateTags() {
+        val movieboxWithBitrate = createLink("MovieBox", "MovieBox [1080p] (8000 kbps)", "https://moviebox.com/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val autoembedPlain = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
 
-        // AutoEmbed MUST beat VidFast even if VidFast claims higher bitrate
-        assertTrue("AutoEmbed beats VidFast with bitrate", StreamLinkOptimizer.isBetterThan(autoembedStream, vidfastWithBitrate))
-        assertFalse("VidFast with bitrate must NOT beat AutoEmbed", StreamLinkOptimizer.isBetterThan(vidfastWithBitrate, autoembedStream))
+        // AutoEmbed (85) MUST beat MovieBox (80) even if MovieBox claims higher bitrate
+        assertTrue("AutoEmbed beats MovieBox with bitrate", StreamLinkOptimizer.isBetterThan(autoembedPlain, movieboxWithBitrate))
+        assertFalse("MovieBox with bitrate must NOT beat AutoEmbed", StreamLinkOptimizer.isBetterThan(movieboxWithBitrate, autoembedPlain))
 
-        // VidEasy MUST beat VidFast even if VidFast claims higher bitrate
-        val vidfastWithHigherBitrate = createLink("VidFast", "VidFast [1080p] (5000 kbps)", "https://vidfast.vc/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val videasyPlain = createLink("VidEasy", "VidEasy [1080p]", "https://api.videasy.net/stream.m3u8", type = ExtractorLinkType.M3U8)
-        assertTrue("VidEasy beats VidFast with bitrate", StreamLinkOptimizer.isBetterThan(videasyPlain, vidfastWithHigherBitrate))
-        assertFalse("VidFast with bitrate must NOT beat VidEasy", StreamLinkOptimizer.isBetterThan(vidfastWithHigherBitrate, videasyPlain))
+        // AutoEmbed (85) MUST beat VidFast (65) even if VidFast claims higher bitrate
+        val vidfastWithHigherBitrate = createLink("VidFast", "VidFast [1080p] (9000 kbps)", "https://vidfast.vc/stream.m3u8", type = ExtractorLinkType.M3U8)
+        assertTrue("AutoEmbed beats VidFast with bitrate", StreamLinkOptimizer.isBetterThan(autoembedPlain, vidfastWithHigherBitrate))
+        assertFalse("VidFast with bitrate must NOT beat AutoEmbed", StreamLinkOptimizer.isBetterThan(vidfastWithHigherBitrate, autoembedPlain))
     }
 
     @Test
     fun testFullFiveTierStrictMonotonicity() {
         val vidlink = createLink("Vidlink", "Vidlink [1080p]", "https://vidlink.pro/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val vidcore = createLink("vidcore", "vidcore [1080p]", "https://vidcore.io/stream.m3u8", type = ExtractorLinkType.M3U8)
         val vidup = createLink("vidup", "vidup [1080p]", "https://vidup.to/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val rivestream = createLink("rivestream", "rivestream [1080p]", "https://rivestream.org/stream.m3u8", type = ExtractorLinkType.M3U8)
         val cinejoy = createLink("CineJoy", "CineJoy [1080p]", "https://cinejoy.to/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val videasy = createLink("VidEasy", "VidEasy [1080p]", "https://api.videasy.net/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val hexasu = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val autoembed = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val moviebox = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.com/stream.m3u8", type = ExtractorLinkType.M3U8)
 
-        val links = listOf(vidlink, vidcore, vidup, rivestream, cinejoy, videasy)
+        val links = listOf(vidlink, vidup, cinejoy, hexasu, autoembed, moviebox)
         val ranks = links.map { StreamLinkOptimizer.getSourcePriorityRank(it) }
 
-        assertEquals(listOf(100, 95, 92, 90, 88, 70), ranks)
+        assertEquals(listOf(100, 95, 90, 88, 85, 80), ranks)
 
         // Verify pairwise transitive dominance: link[i] beats link[j] for all i < j
         for (i in 0 until links.size) {
@@ -545,17 +575,17 @@ class StreamPlayTopTierSourceHierarchyTest {
     fun testOperationalProvidersStrictSortingPreservedRegardlessOfTelemetry() {
         val providers = listOf(
             Provider("vidlink", "Vidlink") { _, _, _, _, _ -> },
+            Provider("vidup", "Vidup") { _, _, _, _, _ -> },
+            Provider("cinejoy", "CineJoy") { _, _, _, _, _ -> },
             Provider("HexaSU", "HexaSU") { _, _, _, _, _ -> },
             Provider("autoembed", "AutoEmbed") { _, _, _, _, _ -> },
-            Provider("vidfast", "VidFast") { _, _, _, _, _ -> },
-            Provider("VidEasy", "VidEasy") { _, _, _, _, _ -> },
             Provider("moviebox", "MovieBox") { _, _, _, _, _ -> }
         )
 
         // Give low tier providers high telemetry
-        ProviderTelemetryManager.recordExecution("VidEasy", true, 100L)
-        ProviderTelemetryManager.recordExecution("vidfast", true, 100L)
         ProviderTelemetryManager.recordExecution("moviebox", true, 100L)
+        ProviderTelemetryManager.recordExecution("autoembed", true, 100L)
+        ProviderTelemetryManager.recordExecution("HexaSU", true, 100L)
 
         val sorted = providers.sortedByDescending { provider ->
             val boost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
@@ -563,13 +593,13 @@ class StreamPlayTopTierSourceHierarchyTest {
             if (score <= -500f) score else (boost * 100f + score)
         }
 
-        val expectedOrder = listOf("vidlink", "VidEasy", "HexaSU", "autoembed", "moviebox", "vidfast")
+        val expectedOrder = listOf("vidlink", "vidup", "cinejoy", "HexaSU", "autoembed", "moviebox")
         assertEquals("Operational providers must strictly preserve priority order", expectedOrder, sorted.map { it.id })
     }
 
     @Test
     fun testAllFiveTopTierSourcesInNonAnimeSet() {
-        val topSix = listOf("vidlink", "vidcore", "vidup", "rivestream", "cinejoy", "VidEasy")
+        val topSix = listOf("vidlink", "vidup", "cinejoy", "HexaSU", "autoembed", "moviebox")
         for (id in topSix) {
             assertTrue("Top-tier provider '$id' must be in NON_ANIME_PROVIDERS", NON_ANIME_PROVIDERS.contains(id))
         }
@@ -584,9 +614,9 @@ class StreamPlayTopTierSourceHierarchyTest {
             isAnime = true
         )
         val allProviders = buildProviders().associateBy { it.id }
-        val topFive = listOf("vidlink", "HexaSU", "autoembed", "vidfast", "VidEasy")
+        val topSix = listOf("vidlink", "vidup", "cinejoy", "HexaSU", "autoembed", "moviebox")
 
-        for (id in topFive) {
+        for (id in topSix) {
             val provider = allProviders[id]
             assertNotNull("Provider '$id' must exist", provider)
             var invoked = false
@@ -754,7 +784,7 @@ class StreamPlayTopTierSourceHierarchyTest {
     fun testTopTierProvidersOrderInProvidersList() {
         val allProviders = buildProviders()
         val top3 = allProviders.take(3).map { it.id }
-        val expected = listOf("vidlink", "vidcore", "vidup")
+        val expected = listOf("vidlink", "vidup", "cinejoy")
         assertEquals("ProvidersList must define top-tier providers in strict priority order", expected, top3)
     }
 
@@ -823,10 +853,10 @@ class StreamPlayTopTierSourceHierarchyTest {
         val videasyM4u = createLink("VidEasy", "VidEasy [M4UHD]", "https://moon.peakstorm.top/hls/master.m3u8", type = ExtractorLinkType.M3U8)
         val videasyNameOnly = createLink("CDN", "VidEasy stream", "https://moon.peakstorm.top/video.mp4", type = ExtractorLinkType.VIDEO)
 
-        // Must be classified as rank 70 (VidEasy) and NOT rank 30 (VidFast)
-        assertEquals("VidEasy CDN on moon.peakstorm.top must have rank 70", 70, StreamLinkOptimizer.getSourcePriorityRank(videasyCdn))
-        assertEquals("VidEasy M4UHD on moon.peakstorm.top must have rank 70", 70, StreamLinkOptimizer.getSourcePriorityRank(videasyM4u))
-        assertEquals("Stream with VidEasy in name on moon.peakstorm.top must have rank 70", 70, StreamLinkOptimizer.getSourcePriorityRank(videasyNameOnly))
+        // Must be classified as rank 60 (VidEasy) and NOT rank 65 (VidFast)
+        assertEquals("VidEasy CDN on moon.peakstorm.top must have rank 60", 60, StreamLinkOptimizer.getSourcePriorityRank(videasyCdn))
+        assertEquals("VidEasy M4UHD on moon.peakstorm.top must have rank 60", 60, StreamLinkOptimizer.getSourcePriorityRank(videasyM4u))
+        assertEquals("Stream with VidEasy in name on moon.peakstorm.top must have rank 60", 60, StreamLinkOptimizer.getSourcePriorityRank(videasyNameOnly))
 
         // Headers & Referer routing: VidEasy on peakstorm.top must receive player.videasy.to
         val headersWithVideasy = mapOf("Referer" to "https://player.videasy.to/", "Origin" to "https://player.videasy.to")
@@ -843,9 +873,9 @@ class StreamPlayTopTierSourceHierarchyTest {
         val vidfastLink = createLink("VidFast", "VidFast [1080p]", "https://moon.peakstorm.top/stream.m3u8", type = ExtractorLinkType.M3U8)
         val unknownLink = createLink("UnknownSource", "Stream 1080p", "https://moon.peakstorm.top/stream.m3u8", type = ExtractorLinkType.M3U8)
 
-        // Must be classified as rank 30 (VidFast)
-        assertEquals("VidFast on moon.peakstorm.top must have rank 30", 30, StreamLinkOptimizer.getSourcePriorityRank(vidfastLink))
-        assertEquals("Unknown link on moon.peakstorm.top must have rank 30", 30, StreamLinkOptimizer.getSourcePriorityRank(unknownLink))
+        // Must be classified as rank 65 (VidFast)
+        assertEquals("VidFast on moon.peakstorm.top must have rank 65", 65, StreamLinkOptimizer.getSourcePriorityRank(vidfastLink))
+        assertEquals("Unknown link on moon.peakstorm.top must have rank 65", 65, StreamLinkOptimizer.getSourcePriorityRank(unknownLink))
 
         // Headers & Referer routing: VidFast on peakstorm.top must receive vidfast.vc
         val effectiveRef = StreamLinkOptimizer.getEffectiveReferer("https://moon.peakstorm.top/stream.m3u8", null, emptyMap())
@@ -862,10 +892,10 @@ class StreamPlayTopTierSourceHierarchyTest {
         val videasyToLink = createLink("UnknownSource", "Stream 1080p", "https://videasy.to/video.mp4", type = ExtractorLinkType.VIDEO)
         val playerVideasyLink = createLink("UnknownSource", "Stream 1080p", "https://player.videasy.to/stream.m3u8", type = ExtractorLinkType.M3U8)
 
-        // Must be classified as rank 70 (VidEasy)
-        assertEquals("speedracelight.com stream must have rank 70", 70, StreamLinkOptimizer.getSourcePriorityRank(speedracelightLink))
-        assertEquals("videasy.to stream must have rank 70", 70, StreamLinkOptimizer.getSourcePriorityRank(videasyToLink))
-        assertEquals("player.videasy.to stream must have rank 70", 70, StreamLinkOptimizer.getSourcePriorityRank(playerVideasyLink))
+        // Must be classified as rank 60 (VidEasy)
+        assertEquals("speedracelight.com stream must have rank 60", 60, StreamLinkOptimizer.getSourcePriorityRank(speedracelightLink))
+        assertEquals("videasy.to stream must have rank 60", 60, StreamLinkOptimizer.getSourcePriorityRank(videasyToLink))
+        assertEquals("player.videasy.to stream must have rank 60", 60, StreamLinkOptimizer.getSourcePriorityRank(playerVideasyLink))
 
         // Headers & Referer routing: speedracelight.com and videasy.to must receive player.videasy.to referer and origin
         for (url in listOf("https://api.speedracelight.com/stream.m3u8", "https://videasy.to/stream.m3u8")) {
@@ -881,38 +911,38 @@ class StreamPlayTopTierSourceHierarchyTest {
     @Test
     fun testStrictOrderFiveTopTierProvidersOrderAndDomination() {
         val vidlink = createLink("Vidlink", "Vidlink [1080p]", "https://vidlink.pro/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val vidcore = createLink("vidcore", "vidcore [1080p]", "https://vidcore.io/stream.m3u8", type = ExtractorLinkType.M3U8)
         val vidup = createLink("vidup", "vidup [1080p]", "https://vidup.to/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val rivestream = createLink("rivestream", "rivestream [1080p]", "https://rivestream.org/stream.m3u8", type = ExtractorLinkType.M3U8)
         val cinejoy = createLink("CineJoy", "CineJoy [1080p]", "https://cinejoy.to/stream.m3u8", type = ExtractorLinkType.M3U8)
-        val videasy = createLink("VidEasy", "VidEasy [1080p]", "https://api.videasy.net/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val hexasu = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val autoembed = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://player.autoembed.cc/stream.m3u8", type = ExtractorLinkType.M3U8)
+        val moviebox = createLink("MovieBox", "MovieBox [1080p]", "https://moviebox.example/stream.mp4", type = ExtractorLinkType.VIDEO)
 
         val rVidlink = StreamLinkOptimizer.getSourcePriorityRank(vidlink)
-        val rVidcore = StreamLinkOptimizer.getSourcePriorityRank(vidcore)
         val rVidup = StreamLinkOptimizer.getSourcePriorityRank(vidup)
-        val rRivestream = StreamLinkOptimizer.getSourcePriorityRank(rivestream)
         val rCinejoy = StreamLinkOptimizer.getSourcePriorityRank(cinejoy)
-        val rVideasy = StreamLinkOptimizer.getSourcePriorityRank(videasy)
+        val rHexasu = StreamLinkOptimizer.getSourcePriorityRank(hexasu)
+        val rAutoembed = StreamLinkOptimizer.getSourcePriorityRank(autoembed)
+        val rMoviebox = StreamLinkOptimizer.getSourcePriorityRank(moviebox)
 
         assertEquals(100, rVidlink)
-        assertEquals(95, rVidcore)
-        assertEquals(92, rVidup)
-        assertEquals(90, rRivestream)
-        assertEquals(88, rCinejoy)
-        assertEquals(70, rVideasy)
+        assertEquals(95, rVidup)
+        assertEquals(90, rCinejoy)
+        assertEquals(88, rHexasu)
+        assertEquals(85, rAutoembed)
+        assertEquals(80, rMoviebox)
 
-        assertTrue("VidLink (100) > Vidcore (95)", rVidlink > rVidcore)
-        assertTrue("Vidcore (95) > Vidup (92)", rVidcore > rVidup)
-        assertTrue("Vidup (92) > RiveStream (90)", rVidup > rRivestream)
-        assertTrue("RiveStream (90) > CineJoy (88)", rRivestream > rCinejoy)
-        assertTrue("CineJoy (88) > VidEasy (70)", rCinejoy > rVideasy)
+        assertTrue("VidLink (100) > Vidup (95)", rVidlink > rVidup)
+        assertTrue("Vidup (95) > CineJoy (90)", rVidup > rCinejoy)
+        assertTrue("CineJoy (90) > HexaSU (88)", rCinejoy > rHexasu)
+        assertTrue("HexaSU (88) > AutoEmbed (85)", rHexasu > rAutoembed)
+        assertTrue("AutoEmbed (85) > MovieBox (80)", rAutoembed > rMoviebox)
 
         // Pairwise isBetterThan transitive checks
-        assertTrue("VidLink beats Vidcore", StreamLinkOptimizer.isBetterThan(vidlink, vidcore))
-        assertTrue("Vidcore beats Vidup", StreamLinkOptimizer.isBetterThan(vidcore, vidup))
-        assertTrue("Vidup beats RiveStream", StreamLinkOptimizer.isBetterThan(vidup, rivestream))
-        assertTrue("RiveStream beats CineJoy", StreamLinkOptimizer.isBetterThan(rivestream, cinejoy))
-        assertTrue("CineJoy beats VidEasy", StreamLinkOptimizer.isBetterThan(cinejoy, videasy))
+        assertTrue("VidLink beats Vidup", StreamLinkOptimizer.isBetterThan(vidlink, vidup))
+        assertTrue("Vidup beats CineJoy", StreamLinkOptimizer.isBetterThan(vidup, cinejoy))
+        assertTrue("CineJoy beats HexaSU", StreamLinkOptimizer.isBetterThan(cinejoy, hexasu))
+        assertTrue("HexaSU beats AutoEmbed", StreamLinkOptimizer.isBetterThan(hexasu, autoembed))
+        assertTrue("AutoEmbed beats MovieBox", StreamLinkOptimizer.isBetterThan(autoembed, moviebox))
     }
 
     @Test
@@ -951,7 +981,7 @@ class StreamPlayTopTierSourceHierarchyTest {
         assertEquals("https://api.videasy.net", StreamPlay.videasyFallbackAPI)
 
         val flixerLink = createLink("HexaSU", "HexaSU [1080p]", "https://flixer.su/stream.m3u8", type = ExtractorLinkType.M3U8)
-        assertEquals("flixer.su stream must be classified as rank 45", 45, StreamLinkOptimizer.getSourcePriorityRank(flixerLink))
+        assertEquals("flixer.su stream must be classified as rank 88", 88, StreamLinkOptimizer.getSourcePriorityRank(flixerLink))
 
         val effRef = StreamLinkOptimizer.getEffectiveReferer("https://flixer.su/stream.m3u8", null, emptyMap())
         assertEquals("https://flixer.su/", effRef)
@@ -1016,10 +1046,12 @@ class StreamPlayTopTierSourceHierarchyTest {
 
         // Exact rank validation
         assertEquals("VidLink rank is 100", 100, rVidlink)
-        assertEquals("HexaSU rank is 45", 45, rHexa)
-        assertEquals("AutoEmbed rank is 40", 40, rAutoembed)
-        assertEquals("VidFast rank is 30", 30, rVidfast)
-        assertEquals("VidEasy rank is 70", 70, rVideasy)
+        assertEquals("HexaSU rank is 88", 88, rHexa)
+        assertEquals("AutoEmbed rank is 85", 85, rAutoembed)
+        assertEquals("MovieBox rank is 80", 80, rMoviebox)
+        assertEquals("RiveStream rank is 70", 70, rRivestream)
+        assertEquals("VidFast rank is 65", 65, rVidfast)
+        assertEquals("VidEasy rank is 60", 60, rVideasy)
         assertEquals("VidSrc rank must be exactly 25", 25, rVidSrc)
         assertEquals("VidSrc CC rank must be exactly 25", 25, rVidSrcCc)
         assertEquals("VidSrc To rank must be exactly 25", 25, rVidSrcTo)
@@ -1028,20 +1060,18 @@ class StreamPlayTopTierSourceHierarchyTest {
         assertEquals("PixelPioneer mirror rank must be exactly 25", 25, rPixelPioneer)
         assertEquals("Putgate mirror rank must be exactly 25", 25, rPutgate)
         assertEquals("WhisperingPines mirror rank must be exactly 25", 25, rWhisperingPines)
-        assertEquals("MovieBox rank is 35", 35, rMoviebox)
-        assertEquals("RiveStream rank is 90", 90, rRivestream)
         assertEquals("Vidrock rank is 20", 20, rVidrock)
         assertEquals("MoviesApi rank is 15", 15, rMoviesapi)
         assertEquals("Secondary rank is 0", 0, rSecondary)
 
-        // Strict monotonicity check: VidLink (100) > RiveStream (90) > VidEasy (70) > HexaSU (45) > AutoEmbed (40) > MovieBox (35) > VidFast (30) > VidSrc (25) > Vidrock (20) > MoviesAPI (15) > Secondary (0)
-        assertTrue(rVidlink > rRivestream)
-        assertTrue(rRivestream > rVideasy)
-        assertTrue(rVideasy > rHexa)
+        // Strict monotonicity check: VidLink (100) > HexaSU (88) > AutoEmbed (85) > MovieBox (80) > RiveStream (70) > VidFast (65) > VidEasy (60) > VidSrc (25) > Vidrock (20) > MoviesAPI (15) > Secondary (0)
+        assertTrue(rVidlink > rHexa)
         assertTrue(rHexa > rAutoembed)
         assertTrue(rAutoembed > rMoviebox)
-        assertTrue(rMoviebox > rVidfast)
-        assertTrue(rVidfast > rVidSrc)
+        assertTrue(rMoviebox > rRivestream)
+        assertTrue(rRivestream > rVidfast)
+        assertTrue(rVidfast > rVideasy)
+        assertTrue(rVideasy > rVidSrc)
         assertTrue(rVidSrc > rVidrock)
         assertTrue(rVidrock > rMoviesapi)
         assertTrue(rMoviesapi > rSecondary)
@@ -1052,8 +1082,8 @@ class StreamPlayTopTierSourceHierarchyTest {
         assertEquals(25f, FAST_PROVIDER_BOOST["vidsrccc"] ?: 0f, 0.001f)
         assertEquals(25f, FAST_PROVIDER_BOOST["vidsrcto"] ?: 0f, 0.001f)
         assertEquals(25f, FAST_PROVIDER_BOOST["vidsrcme"] ?: 0f, 0.001f)
-        assertEquals(35f, FAST_PROVIDER_BOOST["moviebox"] ?: 0f, 0.001f)
-        assertEquals(90f, FAST_PROVIDER_BOOST["rivestream"] ?: 0f, 0.001f)
+        assertEquals(80f, FAST_PROVIDER_BOOST["moviebox"] ?: 0f, 0.001f)
+        assertEquals(70f, FAST_PROVIDER_BOOST["rivestream"] ?: 0f, 0.001f)
         assertEquals(20f, FAST_PROVIDER_BOOST["vidrock"] ?: 0f, 0.001f)
         assertEquals(15f, FAST_PROVIDER_BOOST["moviesapi"] ?: 0f, 0.001f)
 
@@ -1119,8 +1149,8 @@ class StreamPlayTopTierSourceHierarchyTest {
 
         val optimized = StreamLinkOptimizer.optimize(videasyLink)
 
-        // Must retain VidEasy rank 70
-        assertEquals(70, StreamLinkOptimizer.getSourcePriorityRank(optimized))
+        // Must retain VidEasy rank 60
+        assertEquals(60, StreamLinkOptimizer.getSourcePriorityRank(optimized))
 
         // Must NOT be hijacked by VidFast referer (vidfast.vc)
         assertEquals("https://player.videasy.to/", optimized.referer)
@@ -1144,8 +1174,8 @@ class StreamPlayTopTierSourceHierarchyTest {
 
         val optimized = StreamLinkOptimizer.optimize(vidfastLink)
 
-        // Must have VidFast rank 30
-        assertEquals(30, StreamLinkOptimizer.getSourcePriorityRank(optimized))
+        // Must have VidFast rank 65
+        assertEquals(65, StreamLinkOptimizer.getSourcePriorityRank(optimized))
 
         // Must be routed to vidfast.vc
         assertEquals("https://vidfast.vc/", optimized.referer)
@@ -1566,10 +1596,11 @@ class StreamPlayTopTierSourceHierarchyTest {
         assertTrue(NON_ANIME_PROVIDERS.contains("moviesapi"))
         assertTrue(NON_ANIME_PROVIDERS.contains("CinemaCity"))
         assertTrue(NON_ANIME_PROVIDERS.contains("vidlink"))
+        assertTrue(NON_ANIME_PROVIDERS.contains("vidup"))
+        assertTrue(NON_ANIME_PROVIDERS.contains("cinejoy"))
         assertTrue(NON_ANIME_PROVIDERS.contains("HexaSU"))
         assertTrue(NON_ANIME_PROVIDERS.contains("autoembed"))
-        assertTrue(NON_ANIME_PROVIDERS.contains("vidfast"))
-        assertTrue(NON_ANIME_PROVIDERS.contains("VidEasy"))
+        assertTrue(NON_ANIME_PROVIDERS.contains("moviebox"))
     }
 
     @Test
@@ -1598,30 +1629,29 @@ class StreamPlayTopTierSourceHierarchyTest {
     @Test
     fun testFullTenTierHierarchyStrictMonotonicity() {
         val vidlink = createLink(source = "Vidlink", name = "Vidlink HLS", url = "https://hakunaymatata.org/stream.m3u8")
-        val vidcore = createLink(source = "Vidcore", name = "Vidcore HLS", url = "https://vidcore.io/stream.m3u8")
         val vidup = createLink(source = "Vidup", name = "Vidup HLS", url = "https://vidup.to/stream.m3u8")
-        val rivestream = createLink(source = "RiveStream", name = "RiveStream", url = "https://rivestream.example/stream.m3u8")
         val cinejoy = createLink(source = "CineJoy", name = "CineJoy", url = "https://cinejoy.to/stream.m3u8")
-        val videasy = createLink(source = "VidEasy", name = "VidEasy [CDN]", url = "https://player.videasy.to/stream.m3u8")
         val hexa = createLink(source = "HexaSU", name = "HexaSU Server 1", url = "https://hexa.su/stream.m3u8")
         val autoembed = createLink(source = "AutoEmbed", name = "AutoEmbed HLS", url = "https://autoembed.cc/hls.m3u8")
         val moviebox = createLink(source = "MovieBox", name = "MovieBox (Original)", url = "https://moviebox.example/video.mp4")
+        val rivestream = createLink(source = "RiveStream", name = "RiveStream", url = "https://rivestream.example/stream.m3u8")
         val vidfast = createLink(source = "VidFast", name = "VidFast [Server 1]", url = "https://vidfast.vc/stream.m3u8")
+        val videasy = createLink(source = "VidEasy", name = "VidEasy [CDN]", url = "https://player.videasy.to/stream.m3u8")
         val vidsrc = createLink(source = "VidSrc", name = "VidSrc Server v1", url = "https://vidsrc.xyz/stream.m3u8")
         val vidrock = createLink(source = "Vidrock-alpha", name = "Vidrock MP4", url = "https://vidrock.example/stream.mp4")
         val moviesapi = createLink(source = "MoviesApi Club", name = "MoviesApi Club", url = "https://moviesapi.example/master.m3u8")
 
         // 1. Exact priority scores
         assertEquals(100, StreamLinkOptimizer.getSourcePriorityRank(vidlink))
-        assertEquals(95, StreamLinkOptimizer.getSourcePriorityRank(vidcore))
-        assertEquals(92, StreamLinkOptimizer.getSourcePriorityRank(vidup))
-        assertEquals(90, StreamLinkOptimizer.getSourcePriorityRank(rivestream))
-        assertEquals(88, StreamLinkOptimizer.getSourcePriorityRank(cinejoy))
-        assertEquals(70, StreamLinkOptimizer.getSourcePriorityRank(videasy))
-        assertEquals(45, StreamLinkOptimizer.getSourcePriorityRank(hexa))
-        assertEquals(40, StreamLinkOptimizer.getSourcePriorityRank(autoembed))
-        assertEquals(35, StreamLinkOptimizer.getSourcePriorityRank(moviebox))
-        assertEquals(30, StreamLinkOptimizer.getSourcePriorityRank(vidfast))
+        assertEquals(95, StreamLinkOptimizer.getSourcePriorityRank(vidup))
+        assertEquals(90, StreamLinkOptimizer.getSourcePriorityRank(cinejoy))
+        assertEquals(88, StreamLinkOptimizer.getSourcePriorityRank(hexa))
+        assertEquals(85, StreamLinkOptimizer.getSourcePriorityRank(autoembed))
+        assertEquals(80, StreamLinkOptimizer.getSourcePriorityRank(moviebox))
+        assertEquals(70, StreamLinkOptimizer.getSourcePriorityRank(rivestream))
+        assertEquals(65, StreamLinkOptimizer.getSourcePriorityRank(vidfast))
+        assertEquals(60, StreamLinkOptimizer.getSourcePriorityRank(videasy))
+        assertEquals(0, StreamLinkOptimizer.getSourcePriorityRank(createLink("Vidcore", "Vidcore HLS", "https://vidcore.io/stream.m3u8")))
         assertEquals(25, StreamLinkOptimizer.getSourcePriorityRank(vidsrc))
         assertEquals(20, StreamLinkOptimizer.getSourcePriorityRank(vidrock))
         assertEquals(15, StreamLinkOptimizer.getSourcePriorityRank(moviesapi))
@@ -1629,15 +1659,14 @@ class StreamPlayTopTierSourceHierarchyTest {
         // 2. Strict rank order
         val allRanks = listOf(
             StreamLinkOptimizer.getSourcePriorityRank(vidlink),
-            StreamLinkOptimizer.getSourcePriorityRank(vidcore),
             StreamLinkOptimizer.getSourcePriorityRank(vidup),
-            StreamLinkOptimizer.getSourcePriorityRank(rivestream),
             StreamLinkOptimizer.getSourcePriorityRank(cinejoy),
-            StreamLinkOptimizer.getSourcePriorityRank(videasy),
             StreamLinkOptimizer.getSourcePriorityRank(hexa),
             StreamLinkOptimizer.getSourcePriorityRank(autoembed),
             StreamLinkOptimizer.getSourcePriorityRank(moviebox),
+            StreamLinkOptimizer.getSourcePriorityRank(rivestream),
             StreamLinkOptimizer.getSourcePriorityRank(vidfast),
+            StreamLinkOptimizer.getSourcePriorityRank(videasy),
             StreamLinkOptimizer.getSourcePriorityRank(vidsrc),
             StreamLinkOptimizer.getSourcePriorityRank(vidrock),
             StreamLinkOptimizer.getSourcePriorityRank(moviesapi)
@@ -1654,15 +1683,14 @@ class StreamPlayTopTierSourceHierarchyTest {
     fun testIsBetterThanStrictHierarchyAtEqualResolution() {
         val links = listOf(
             createLink(source = "Vidlink", name = "Vidlink HLS", url = "https://cdn.example/vidlink.m3u8", quality = Qualities.P1080.value),
-            createLink(source = "Vidcore", name = "Vidcore HLS", url = "https://cdn.example/vidcore.m3u8", quality = Qualities.P1080.value),
             createLink(source = "Vidup", name = "Vidup HLS", url = "https://cdn.example/vidup.m3u8", quality = Qualities.P1080.value),
-            createLink(source = "RiveStream", name = "RiveStream", url = "https://cdn.example/rivestream.m3u8", quality = Qualities.P1080.value),
             createLink(source = "CineJoy", name = "CineJoy HLS", url = "https://cdn.example/cinejoy.m3u8", quality = Qualities.P1080.value),
-            createLink(source = "VidEasy", name = "VidEasy", url = "https://cdn.example/videasy.m3u8", quality = Qualities.P1080.value),
             createLink(source = "HexaSU", name = "HexaSU Server 1", url = "https://cdn.example/hexa.m3u8", quality = Qualities.P1080.value),
             createLink(source = "AutoEmbed", name = "AutoEmbed", url = "https://cdn.example/autoembed.m3u8", quality = Qualities.P1080.value),
             createLink(source = "MovieBox", name = "MovieBox", url = "https://cdn.example/moviebox.m3u8", quality = Qualities.P1080.value),
+            createLink(source = "RiveStream", name = "RiveStream", url = "https://cdn.example/rivestream.m3u8", quality = Qualities.P1080.value),
             createLink(source = "VidFast", name = "VidFast", url = "https://cdn.example/vidfast.m3u8", quality = Qualities.P1080.value),
+            createLink(source = "VidEasy", name = "VidEasy", url = "https://cdn.example/videasy.m3u8", quality = Qualities.P1080.value),
             createLink(source = "VidSrc", name = "VidSrc", url = "https://cdn.example/vidsrc.m3u8", quality = Qualities.P1080.value),
             createLink(source = "Vidrock", name = "Vidrock", url = "https://cdn.example/vidrock.m3u8", quality = Qualities.P1080.value),
             createLink(source = "MoviesApi", name = "MoviesApi", url = "https://cdn.example/moviesapi.m3u8", quality = Qualities.P1080.value)
@@ -1682,8 +1710,8 @@ class StreamPlayTopTierSourceHierarchyTest {
         val linkTo = createLink(source = "Unknown", name = "Stream", url = "https://autoembed.to/api/hls/master.m3u8")
         val linkCo = createLink(source = "Unknown", name = "Stream", url = "https://autoembed.co/stream/video.mp4")
 
-        assertEquals(40, StreamLinkOptimizer.getSourcePriorityRank(linkTo))
-        assertEquals(40, StreamLinkOptimizer.getSourcePriorityRank(linkCo))
+        assertEquals(85, StreamLinkOptimizer.getSourcePriorityRank(linkTo))
+        assertEquals(85, StreamLinkOptimizer.getSourcePriorityRank(linkCo))
 
         val refTo = StreamLinkOptimizer.getEffectiveReferer(
             url = linkTo.url,
@@ -1711,8 +1739,8 @@ class StreamPlayTopTierSourceHierarchyTest {
         val embedsuLink = createLink(source = "embedsu", name = "embedsu server", url = "https://arbitrary-cdn.net/stream.m3u8")
         val flixerLink = createLink(source = "flixersu", name = "flixer stream", url = "https://arbitrary-cdn.net/hls/video.m3u8")
 
-        assertEquals(45, StreamLinkOptimizer.getSourcePriorityRank(embedsuLink))
-        assertEquals(45, StreamLinkOptimizer.getSourcePriorityRank(flixerLink))
+        assertEquals(88, StreamLinkOptimizer.getSourcePriorityRank(embedsuLink))
+        assertEquals(88, StreamLinkOptimizer.getSourcePriorityRank(flixerLink))
 
         val embedsuHeaders = StreamLinkOptimizer.buildDownloadHeaders(
             existingHeaders = emptyMap(),
@@ -1999,26 +2027,30 @@ class StreamPlayTopTierSourceHierarchyTest {
     }
 
     @Test
-    fun testStreamLinkOptimizerTopTierRanksIncludeVidcoreAndVidup() {
-        val linkVidcore = createLink("Vidcore", "Vidcore Supreme [1080p]", "https://moon.quietridge.top/vd/master.m3u8")
+    fun testStreamLinkOptimizerTopTierRanksIncludeVidupAndCinejoy() {
         val linkVidup = createLink("Vidup", "Vidup Euro [1080p]", "https://moon.quietridge.top/vd/master.m3u8")
         val linkCinejoy = createLink("CineJoy", "CineJoy Lisbon [1080p]", "https://ok.solarpanelcleaning.cc/playlist.m3u8")
+        val linkHexasu = createLink("HexaSU", "HexaSU [1080p]", "https://hexa.su/stream.m3u8")
+        val linkAutoembed = createLink("AutoEmbed", "AutoEmbed [1080p]", "https://autoembed.cc/playlist.m3u8")
 
-        val rVidcore = StreamLinkOptimizer.getSourcePriorityRank(linkVidcore)
         val rVidup = StreamLinkOptimizer.getSourcePriorityRank(linkVidup)
         val rCinejoy = StreamLinkOptimizer.getSourcePriorityRank(linkCinejoy)
+        val rHexasu = StreamLinkOptimizer.getSourcePriorityRank(linkHexasu)
+        val rAutoembed = StreamLinkOptimizer.getSourcePriorityRank(linkAutoembed)
 
-        assertEquals("Vidcore priority rank is 95", 95, rVidcore)
-        assertEquals("Vidup priority rank is 92", 92, rVidup)
-        assertEquals("CineJoy priority rank is 88", 88, rCinejoy)
+        assertEquals("Vidup priority rank is 95", 95, rVidup)
+        assertEquals("CineJoy priority rank is 90", 90, rCinejoy)
+        assertEquals("HexaSU priority rank is 88", 88, rHexasu)
+        assertEquals("AutoEmbed priority rank is 85", 85, rAutoembed)
 
-        assertTrue("Vidcore (95) beats Vidup (92)", rVidcore > rVidup)
-        assertTrue("Vidup (92) beats CineJoy (88)", rVidup > rCinejoy)
+        assertTrue("Vidup (95) beats CineJoy (90)", rVidup > rCinejoy)
+        assertTrue("CineJoy (90) beats HexaSU (88)", rCinejoy > rHexasu)
+        assertTrue("HexaSU (88) beats AutoEmbed (85)", rHexasu > rAutoembed)
 
-        // Verify dispatcher in-flight coordination with active top ranks containing 95 and 92
+        // Verify dispatcher in-flight coordination with active top ranks containing 95 and 90
         val emittedLinks = mutableListOf<ExtractorLink>()
-        val activeRanks = setOf(100, 95, 92, 88)
-        var vidcoreInFlight = true
+        val activeRanks = setOf(100, 95, 90, 88, 85, 80)
+        var vidupInFlight = true
 
         val scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined)
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
@@ -2027,20 +2059,20 @@ class StreamPlayTopTierSourceHierarchyTest {
             stageWindowMs = 0L,
             topSourceGraceMs = 5000L,
             activeTopRanks = activeRanks,
-            isRankInFlight = { rank -> if (rank == 95) vidcoreInFlight else false }
+            isRankInFlight = { rank -> if (rank == 95) vidupInFlight else false }
         )
 
-        // Cinejoy 720p emitted while Vidcore is in-flight: should wait for Vidcore
+        // Cinejoy 720p emitted while Vidup is in-flight: should wait for Vidup
         val cinejoy720 = createLink("CineJoy", "CineJoy Lisbon [720p]", "https://ok.solarpanelcleaning.cc/720.m3u8", quality = Qualities.P720.value)
         dispatcher.onSubtitleReceived()
         dispatcher.onLinkAccepted(cinejoy720)
-        assertTrue("CineJoy 720p must be held while higher-priority Vidcore (95) is in flight", emittedLinks.isEmpty())
+        assertTrue("CineJoy 720p must be held while higher-priority Vidup (95) is in flight", emittedLinks.isEmpty())
 
-        // Mark Vidcore as completed
-        vidcoreInFlight = false
-        dispatcher.markProviderCompleted("vidcore")
+        // Mark Vidup as completed
+        vidupInFlight = false
+        dispatcher.markProviderCompleted("vidup")
 
-        assertTrue("CineJoy 720p must be released once higher-priority Vidcore completes", emittedLinks.isNotEmpty())
+        assertTrue("CineJoy 720p must be released once higher-priority Vidup completes", emittedLinks.isNotEmpty())
     }
 
     @Test
@@ -2061,11 +2093,18 @@ class StreamPlayTopTierSourceHierarchyTest {
     }
 
     @Test
-    fun testVidcoreAndVidupAcceptImdbIdAndBuildCorrectUrls() = runBlocking {
-        // Test that invokeVidcore and invokeVidup accept imdbId and don't immediately return when tmdbId is null
-        // (Invoking with cancelled/empty callback will execute validation and gracefully exit)
+    fun testVidfastAndVidupAcceptImdbIdAndBuildCorrectUrls() = runBlocking {
+        // Test that invokeVidFast and invokeVidup accept imdbId and don't immediately return when tmdbId is null
         var called = false
-        StreamPlayExtractor.invokeVidcore(
+        StreamPlayExtractor.invokeVidFast(
+            tmdbId = null,
+            season = null,
+            episode = null,
+            subtitleCallback = null,
+            imdbId = "tt0137523",
+            callback = { called = true }
+        )
+        StreamPlayExtractor.invokeVidup(
             tmdbId = null,
             season = null,
             episode = null,
@@ -2079,10 +2118,10 @@ class StreamPlayTopTierSourceHierarchyTest {
 
     @Test
     fun testQualitySortingStrictSotaHierarchy() {
-        val link720 = createLink("Vidcore", "Vidcore Supreme [720p]", "https://moon.quietridge.top/720.m3u8", quality = Qualities.P720.value)
-        val link1080 = createLink("Vidcore", "Vidcore Supreme [1080p]", "https://moon.quietridge.top/1080.m3u8", quality = Qualities.P1080.value)
-        val link480 = createLink("Vidcore", "Vidcore Supreme [480p]", "https://moon.quietridge.top/480.m3u8", quality = Qualities.P480.value)
-        val link4k = createLink("Vidcore", "Vidcore Supreme [4K]", "https://moon.quietridge.top/4k.m3u8", quality = Qualities.P2160.value)
+        val link720 = createLink("VidFast", "VidFast [Server 1] [720p]", "https://vidfast.vc/720.m3u8", quality = Qualities.P720.value)
+        val link1080 = createLink("VidFast", "VidFast [Server 1] [1080p]", "https://vidfast.vc/1080.m3u8", quality = Qualities.P1080.value)
+        val link480 = createLink("VidFast", "VidFast [Server 1] [480p]", "https://vidfast.vc/480.m3u8", quality = Qualities.P480.value)
+        val link4k = createLink("VidFast", "VidFast [Server 1] [4K]", "https://vidfast.vc/4k.m3u8", quality = Qualities.P2160.value)
 
         val unsorted = listOf(link4k, link480, link1080, link720)
         val sorted = unsorted.sortedWith(StreamLinkOptimizer.STREAM_PRIORITY_COMPARATOR)
@@ -2091,5 +2130,62 @@ class StreamPlayTopTierSourceHierarchyTest {
         assertEquals("1080p must be #2 priority", Qualities.P1080.value, sorted[1].quality)
         assertEquals("480p must be #3 priority", Qualities.P480.value, sorted[2].quality)
         assertEquals("4K must be #4 priority", Qualities.P2160.value, sorted[3].quality)
+    }
+
+    @Test
+    fun testCineJoyRefererAndOriginAreCineJoyPkNotSolarPanelCleaning() {
+        val streamUrl = "https://nebula.bright67.online/hls/master.m3u8"
+        val dlHeaders = StreamLinkOptimizer.buildDownloadHeaders(emptyMap(), streamUrl, null, source = "CineJoy")
+        assertEquals("CineJoy referer must be cinejoy.pk", "https://cinejoy.pk/", dlHeaders["Referer"])
+        assertEquals("CineJoy origin must be cinejoy.pk", "https://cinejoy.pk", dlHeaders["Origin"])
+
+        val effRef = StreamLinkOptimizer.getEffectiveReferer(streamUrl, null, emptyMap(), source = "CineJoy")
+        assertEquals("CineJoy effective referer must be cinejoy.pk", "https://cinejoy.pk/", effRef)
+
+        val link = createLink("CineJoy", "CineJoy Nebula [720p]", streamUrl, quality = Qualities.P720.value)
+        assertEquals("bright67.online must have rank 90", 90, StreamLinkOptimizer.getSourcePriorityRank(link))
+    }
+
+    @Test
+    fun testVidlinkDownloadHeadersInjectAcceptRangesAndCleanReferer() {
+        val cdnUrl = "https://bcdn.hakunaymatata.com/direct/550/movie_720.mp4"
+        val dlHeaders = StreamLinkOptimizer.buildDownloadHeaders(
+            mapOf("Referer" to "https://vidlink.pro/movie/550", "Origin" to "https://vidlink.pro"),
+            cdnUrl,
+            "https://vidlink.pro/",
+            source = "Vidlink"
+        )
+        assertEquals("VidLink must inject Accept-Ranges bytes", "bytes", dlHeaders["Accept-Ranges"])
+        assertFalse("VidLink must sanitize vidlink.pro from referer to prevent 429", dlHeaders.containsKey("Referer"))
+        assertFalse("VidLink must sanitize vidlink.pro from origin to prevent 429", dlHeaders.containsKey("Origin"))
+    }
+
+    @Test
+    fun testPriorityStreamDispatcherHolds720pWithoutSubsWhenHigherRankInFlight() = runBlocking {
+        val emitted = mutableListOf<ExtractorLink>()
+        var vidlinkInFlight = true
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = { emitted.add(it) },
+            scope = this,
+            stageWindowMs = 0L,
+            subtitleGraceMs = 50L,
+            topSourceGraceMs = 2000L,
+            activeTopRanks = setOf(100, 88),
+            isRankInFlight = { rank -> if (rank == 100) vidlinkInFlight else false }
+        )
+
+        val hexasu720 = createLink("HexaSU", "HexaSU [720p]", "https://hexa.su/720.m3u8", Qualities.P720.value)
+        dispatcher.onLinkAccepted(hexasu720)
+
+        // Wait past subtitle grace (50ms)
+        delay(100L)
+        assertTrue("HexaSU 720p must be held while rank 100 Vidlink is in flight despite subtitle grace expiry", emitted.isEmpty())
+
+        // Vidlink completes
+        vidlinkInFlight = false
+        dispatcher.markProviderCompleted("vidlink")
+
+        assertTrue("HexaSU 720p must now be released after higher rank completes", emitted.isNotEmpty())
+        assertEquals("HexaSU", emitted[0].source)
     }
 }
