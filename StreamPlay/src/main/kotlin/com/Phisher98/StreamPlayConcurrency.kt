@@ -166,19 +166,21 @@ object StreamPlayConcurrency {
     }
 
     fun getProviderExecutionTimeout(providerId: String): Long {
+        val isTop = StreamLinkOptimizer.isTopTierProvider(providerId)
         val stats = StreamPlayCache.getProviderStats(providerId)
-        if (stats.isCircuitBroken) return 4_000L
-        if (stats.isRecovering) return 10_000L
-        if (stats.successCount + stats.failureCount == 0) return 20_000L
+        if (stats.isCircuitBroken) return if (isTop) 8_000L else 4_000L
+        if (stats.isRecovering) return if (isTop) 15_000L else 10_000L
+        if (stats.successCount + stats.failureCount == 0) return if (isTop) 25_000L else 20_000L
 
         val historyBasedTimeout = when {
-            stats.avgTimeMs <= 0L -> 20_000L
-            stats.avgTimeMs < 2_000L -> 7_000L
-            stats.avgTimeMs < 8_000L -> stats.avgTimeMs + 6_000L
-            else -> stats.avgTimeMs + 8_000L
+            stats.avgTimeMs <= 0L -> if (isTop) 25_000L else 20_000L
+            stats.avgTimeMs < 2_000L -> if (isTop) 18_000L else 7_000L
+            stats.avgTimeMs < 8_000L -> stats.avgTimeMs + if (isTop) 12_000L else 6_000L
+            else -> stats.avgTimeMs + if (isTop) 14_000L else 8_000L
         }
 
-        return historyBasedTimeout.coerceIn(5_000L, 28_000L)
+        val minBound = if (isTop) 15_000L else 5_000L
+        return historyBasedTimeout.coerceIn(minBound, 30_000L)
     }
 
     fun normalizeConcurrency(value: Int): Int =

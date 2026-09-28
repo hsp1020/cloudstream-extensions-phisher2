@@ -4723,11 +4723,11 @@ object StreamPlayExtractor : StreamPlay() {
             }
             if (effectiveTmdbId == null || (season != null && season != 0 && episode == null)) return
 
-            withTimeoutOrNull(10000L) {
+            withTimeoutOrNull(25000L) {
                 val encUrl = "https://enc-dec.app/api/enc-vidlink?text=$effectiveTmdbId"
                 val encData = encDecApiSemaphore.withPermit {
                     retryTransient(4, 350L) {
-                        val resp = runCatching { app.get(encUrl, timeout = 7L) }.getOrNull()
+                        val resp = runCatching { app.get(encUrl, timeout = 15L) }.getOrNull()
                         if (resp != null) {
                             if (resp.code == 429) {
                                 val retryAfterSec = resp.headers["Retry-After"]?.toLongOrNull() ?: 1L
@@ -4769,7 +4769,7 @@ object StreamPlayExtractor : StreamPlay() {
                 for (apiUrl in apiUrls) {
                     val epResponse = retryTransient(2, 250L) {
                         val resp = suspendCancellable {
-                            runCatching { app.get(apiUrl, headers = headers, timeout = 6L) }.getOrNull()
+                            runCatching { app.get(apiUrl, headers = headers, timeout = 15L) }.getOrNull()
                         }
                         if (resp != null && resp.isSuccessful && resp.text.isNotBlank()) resp.text else null
                     } ?: continue
@@ -4856,7 +4856,7 @@ object StreamPlayExtractor : StreamPlay() {
                     if (origin.isNotBlank()) hlsHeaders["Origin"] = origin
                     if (referer.isNotBlank()) hlsHeaders["Referer"] = referer
 
-                    val generatedLinks = withTimeoutOrNull(4500L) {
+                    val generatedLinks = withTimeoutOrNull(15000L) {
                         runCatching {
                             generateM3u8(
                                 "Vidlink",
@@ -4911,7 +4911,16 @@ object StreamPlayExtractor : StreamPlay() {
                     val videoUrl = qualityObj?.url?.trim()
                     if (!videoUrl.isNullOrBlank() && videoUrl.startsWith("http", ignoreCase = true)) {
                         val qual = qualityKey?.let {
-                            StreamLinkOptimizer.extractQualityFromText(it).takeIf { q -> q > Qualities.Unknown.value } ?: getQualityFromName(it)
+                            val qInt = it.replace(Regex("[^0-9]"), "").toIntOrNull()
+                            when (qInt) {
+                                2160 -> Qualities.P2160.value
+                                1440 -> Qualities.P1440.value
+                                1080 -> Qualities.P1080.value
+                                720 -> Qualities.P720.value
+                                480 -> Qualities.P480.value
+                                360 -> Qualities.P360.value
+                                else -> StreamLinkOptimizer.extractQualityFromText(it).takeIf { q -> q > Qualities.Unknown.value } ?: getQualityFromName(it)
+                            }
                         } ?: Qualities.Unknown.value
                         val isDirectVideo = !videoUrl.contains(".m3u8", ignoreCase = true)
                         val qualHeaders = sanitizeVidlinkHeaders(qualityObj.headers)
@@ -4923,7 +4932,15 @@ object StreamPlayExtractor : StreamPlay() {
                         }
                         if (cleanVideoUrl.startsWith("http", ignoreCase = true)) {
                             val effectiveRef = qualHeaders["Referer"] ?: ""
-                            val effectiveQuality = qualityKey?.takeIf { it.isNotBlank() } ?: "Auto"
+                            val effectiveQuality = when {
+                                qualityKey.equals("720", ignoreCase = true) || qualityKey.equals("720p", ignoreCase = true) -> "720p"
+                                qualityKey.equals("1080", ignoreCase = true) || qualityKey.equals("1080p", ignoreCase = true) -> "1080p"
+                                qualityKey.equals("480", ignoreCase = true) || qualityKey.equals("480p", ignoreCase = true) -> "480p"
+                                qualityKey.equals("360", ignoreCase = true) || qualityKey.equals("360p", ignoreCase = true) -> "360p"
+                                qualityKey.equals("2160", ignoreCase = true) || qualityKey.equals("4k", ignoreCase = true) -> "4K"
+                                !qualityKey.isNullOrBlank() -> if (qualityKey.endsWith("p", ignoreCase = true)) qualityKey else "${qualityKey}p"
+                                else -> "Auto"
+                            }
                             directQualitiesLinks.add(
                                 newExtractorLink(
                                     "Vidlink",
@@ -5019,7 +5036,7 @@ object StreamPlayExtractor : StreamPlay() {
         try {
             if ((tmdbId == null && imdbId.isNullOrBlank()) || (season != null && season != 0 && episode == null)) return
 
-            withTimeoutOrNull(9500L) {
+            withTimeoutOrNull(25000L) {
                 val base = "https://vidup.to"
                 val api = "https://enc-dec.app/api"
 
@@ -5953,8 +5970,8 @@ object StreamPlayExtractor : StreamPlay() {
                             "Origin" to referer.removeSuffix("/")
                         )
                         val response = suspendCancellable {
-                            withTimeoutOrNull(2500L) {
-                                safeGet(url, targetHeaders, timeout = 3L)
+                            withTimeoutOrNull(1800L) {
+                                safeGet(url, targetHeaders, timeout = 2L)
                             }
                         }
                         if (response != null && response.isSuccessful && response.code !in listOf(403, 404, 500, 502, 503, 521, 522) && response.text.isNotBlank()) {
@@ -5980,7 +5997,7 @@ object StreamPlayExtractor : StreamPlay() {
                                 "$apiBase/dec-hexa",
                                 headers = mapOf("Content-Type" to "application/json"),
                                 requestBody = jsonBody,
-                                timeout = 8L
+                                timeout = 4L
                             ).parsedSafe<HexaResponse>()
                         }
                     }
@@ -6091,7 +6108,7 @@ object StreamPlayExtractor : StreamPlay() {
         try {
             if (tmdbId == null || (season != null && season != 0 && episode == null)) return
 
-            withTimeoutOrNull(2500L) {
+            withTimeoutOrNull(25000L) {
                 val paths = if (season == null || (season == 0 && episode == null)) {
                     listOf("/embed/movie/$tmdbId", "/movie/$tmdbId")
                 } else {
@@ -6160,7 +6177,7 @@ object StreamPlayExtractor : StreamPlay() {
                 )
 
                 if (isHls) {
-                    val m3u8Links = withTimeoutOrNull(4000L) {
+                    val m3u8Links = withTimeoutOrNull(12000L) {
                         runCatching {
                             generateM3u8(
                                 "AutoEmbed",
@@ -6212,8 +6229,8 @@ object StreamPlayExtractor : StreamPlay() {
                     val url = "$domain$path"
                     val headers = baseHeaders + mapOf("Referer" to "$domain/")
                     val response = suspendCancellable {
-                        withTimeoutOrNull(1500L) {
-                            safeGet(url, headers = headers, timeout = 2L)
+                        withTimeoutOrNull(5000L) {
+                            safeGet(url, headers = headers, timeout = 5L)
                         }
                     }
                     if (response == null) {

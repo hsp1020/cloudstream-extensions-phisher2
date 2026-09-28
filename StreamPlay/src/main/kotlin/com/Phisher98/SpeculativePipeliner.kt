@@ -493,22 +493,27 @@ object SpeculativePipeliner {
         }
 
         fun isTopTierTask(info: TrackedTaskInfo): Boolean {
-            return StreamLinkOptimizer.isTopTierProvider(info.task.providerId) ||
-                info.task.priorityBoost >= 80f ||
-                (FAST_PROVIDER_BOOST[info.task.providerId] ?: 0f) >= 80f
+            return if (info.task.priorityBoost > 0f) {
+                info.task.priorityBoost >= 80f
+            } else {
+                StreamLinkOptimizer.isTopTierProvider(info.task.providerId) ||
+                    (FAST_PROVIDER_BOOST[info.task.providerId] ?: 0f) >= 80f
+            }
         }
 
         fun isTopTierTask(task: PipelinedTask): Boolean {
-            val boost = if (task.priorityBoost > 0f) task.priorityBoost else (FAST_PROVIDER_BOOST[task.providerId] ?: 0f)
-            return StreamLinkOptimizer.isTopTierProvider(task.providerId) ||
-                boost >= 80f ||
+            return if (task.priorityBoost > 0f) {
                 task.priorityBoost >= 80f
+            } else {
+                StreamLinkOptimizer.isTopTierProvider(task.providerId) ||
+                    (FAST_PROVIDER_BOOST[task.providerId] ?: 0f) >= 80f
+            }
         }
 
         fun cancelLowerOrEqualPriorityJobs() {
             val threshold = getMaxPriorityThreshold()
             for (info in trackedTasks) {
-                if (info.job.isActive && info.task.isVideo && info.priorityScore <= threshold) {
+                if (info.job.isActive && info.task.isVideo && !isTopTierTask(info) && info.priorityScore <= threshold) {
                     info.job.cancel(CancellationException("Early satisfaction achieved by higher tier source"))
                 }
             }

@@ -903,18 +903,19 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
         val emittedSubtitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
         val earlySatisfactionConfig = EarlySatisfactionConfig(
-            minVerifiedLinks = 2,
-            minQualityStreams = 2,
+            minVerifiedLinks = 12,
+            minQualityStreams = 6,
             qualityThreshold = Qualities.P720.value,
             highBitrateThresholdKbps = 2500,
             minSubtitles = 1,
             satisfyWithOneLinkIfSubsFound = false,
-            requireSubtitles = true,
+            requireSubtitles = false,
             requireDualQualities = false,
-            require720p = true,
+            require720p = false,
             adaptiveTierEscalation = true,
-            softGracePeriodAfterFirstLinkMs = 4500L,
-            maxPipelineTimeoutMs = 18_000L
+            softGracePeriodAfterFirstLinkMs = 0L,
+            maxPipelineTimeoutMs = if (slowInternetMode) 45_000L else 30_000L,
+            postSatisfactionGraceMs = if (slowInternetMode) 35_000L else 25_000L
         )
         val earlyController = EarlySatisfactionController(earlySatisfactionConfig)
         // Assumption: PriorityStreamDispatcher uses top720GraceMs and fhdGraceMs to ensure top sources
@@ -1030,55 +1031,58 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
             }
         }
 
-        if (primaryTasks.isNotEmpty()) {
-            Log.d(TAG, "🚀 Starting ${primaryTasks.size} primary providers with SpeculativePipeliner (concurrency: $concurrency)")
-            SpeculativePipeliner.executePipelined(
-                tasks = primaryTasks,
-                config = earlySatisfactionConfig,
-                controller = earlyController,
-                maxConcurrencyOverride = concurrency
-            )
-        }
-
-        // Phase 2: Secondary / legacy fallback sources only invoked when all primary sources yield zero usable streams
-        val primaryLinksFound = linksFound.get()
-        if (primaryLinksFound == 0 && fallbackProviders.isNotEmpty()) {
-            Log.d(TAG, "⚠️ All primary sources yielded zero usable streams. Invoking ${fallbackProviders.size} strict fallback providers.")
-            val prioritizedFallback = fallbackProviders.sortedByDescending { provider ->
-                val boost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
-                val score = StreamPlayCache.getProviderPriorityScore(provider.id)
-                if (score <= -500f) score else (boost * 100f + score)
+        try {
+            if (primaryTasks.isNotEmpty()) {
+                Log.d(TAG, "🚀 Starting ${primaryTasks.size} primary providers with SpeculativePipeliner (concurrency: $concurrency)")
+                SpeculativePipeliner.executePipelined(
+                    tasks = primaryTasks,
+                    config = earlySatisfactionConfig,
+                    controller = earlyController,
+                    maxConcurrencyOverride = concurrency
+                )
             }
-            val fallbackTasks = prioritizedFallback.map { provider ->
-                val providerTimeout = StreamPlayConcurrency.getProviderExecutionTimeout(provider.id)
-                    .let { if (slowInternetMode) (it * 1.35).toLong().coerceAtMost(45_000L) else it }
-                PipelinedTask(
-                    providerId = provider.id,
-                    isVideo = provider.kind != ProviderKind.SUBTITLE,
-                    taskTimeoutMs = providerTimeout,
-                    priorityBoost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
-                ) {
-                    provider.invoke(
-                        res,
-                        { subtitle -> emitSubtitle(subtitle) },
-                        { link -> emitLink(link) },
-                        authToken,
-                        dahmerMoviesAPI
-                    )
+
+            // Phase 2: Secondary / legacy fallback sources only invoked when all primary sources yield zero usable streams
+            val primaryLinksFound = linksFound.get()
+            if (primaryLinksFound == 0 && fallbackProviders.isNotEmpty()) {
+                Log.d(TAG, "⚠️ All primary sources yielded zero usable streams. Invoking ${fallbackProviders.size} strict fallback providers.")
+                val prioritizedFallback = fallbackProviders.sortedByDescending { provider ->
+                    val boost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
+                    val score = StreamPlayCache.getProviderPriorityScore(provider.id)
+                    if (score <= -500f) score else (boost * 100f + score)
                 }
+                val fallbackTasks = prioritizedFallback.map { provider ->
+                    val providerTimeout = StreamPlayConcurrency.getProviderExecutionTimeout(provider.id)
+                        .let { if (slowInternetMode) (it * 1.35).toLong().coerceAtMost(45_000L) else it }
+                    PipelinedTask(
+                        providerId = provider.id,
+                        isVideo = provider.kind != ProviderKind.SUBTITLE,
+                        taskTimeoutMs = providerTimeout,
+                        priorityBoost = FAST_PROVIDER_BOOST[provider.id] ?: 0f
+                    ) {
+                        provider.invoke(
+                            res,
+                            { subtitle -> emitSubtitle(subtitle) },
+                            { link -> emitLink(link) },
+                            authToken,
+                            dahmerMoviesAPI
+                        )
+                    }
+                }
+                SpeculativePipeliner.executePipelined(
+                    tasks = fallbackTasks,
+                    config = earlySatisfactionConfig,
+                    controller = earlyController,
+                    maxConcurrencyOverride = concurrency
+                )
+            } else if (primaryLinksFound > 0) {
+                Log.d(TAG, "🎯 Primary sources successfully resolved $primaryLinksFound streams. Strict fallback providers skipped.")
             }
-            SpeculativePipeliner.executePipelined(
-                tasks = fallbackTasks,
-                config = earlySatisfactionConfig,
-                controller = earlyController,
-                maxConcurrencyOverride = concurrency
-            )
-        } else if (primaryLinksFound > 0) {
-            Log.d(TAG, "🎯 Primary sources successfully resolved $primaryLinksFound streams. Strict fallback providers skipped.")
+        } finally {
+            dispatcher.flush()
+            ProviderTelemetryManager.scheduleSave(sharedPref ?: companionSharedPref)
         }
 
-        dispatcher.flush()
-        ProviderTelemetryManager.scheduleSave(sharedPref ?: companionSharedPref)
         val foundAnyResults = totalResultsFound() > 0
         Log.d(TAG, "✅ Finished: checked sources, ${linksFound.get()} links and ${subtitlesFound.get()} subtitles found")
         foundAnyResults
