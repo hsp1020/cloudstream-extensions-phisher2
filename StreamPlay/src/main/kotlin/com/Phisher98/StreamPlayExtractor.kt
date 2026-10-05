@@ -46,7 +46,17 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.Interceptor
+import okhttp3.Request
+import okhttp3.Response
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -61,6 +71,7 @@ import java.net.URLEncoder
 import java.security.SecureRandom
 import java.util.Collections
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -83,15 +94,20 @@ object StreamPlayExtractor : StreamPlay() {
 
     private val cloudflareKiller by lazy { CloudflareKiller() }
     val encDecApiSemaphore = Semaphore(4)
+    val vidlinkEncCache = ConcurrentHashMap<Int, String>()
 
     suspend inline fun <T> suspendCancellable(crossinline block: suspend () -> T): T? {
-        return try {
+        currentCoroutineContext().ensureActive()
+        val result = try {
             block()
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            null
+            currentCoroutineContext().ensureActive()
+            return null
         }
+        currentCoroutineContext().ensureActive()
+        return result
     }
 
     suspend fun <T> retryTransient(maxRetries: Int = 1, delayMs: Long = 200L, block: suspend () -> T?): T? {
@@ -109,6 +125,132 @@ object StreamPlayExtractor : StreamPlay() {
             attempt++
         }
         return null
+    }
+
+    suspend fun cancellableGetText(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        timeoutSec: Long = 3L
+    ): String? = suspendCancellableCoroutine { cont ->
+        try {
+            val client = app.baseClient.newBuilder()
+                .callTimeout(timeoutSec, TimeUnit.SECONDS)
+                .connectTimeout(timeoutSec, TimeUnit.SECONDS)
+                .readTimeout(timeoutSec, TimeUnit.SECONDS)
+                .build()
+            val req = Request.Builder()
+                .url(url)
+                .apply {
+                    headers.forEach { (k, v) -> addHeader(k, v) }
+                }
+                .build()
+            val call = client.newCall(req)
+            cont.invokeOnCancellation {
+                call.cancel()
+            }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) {
+                        if (call.isCanceled()) {
+                            cont.cancel(CancellationException(e.message, e))
+                        } else {
+                            cont.resume(null)
+                        }
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        val body = response.body?.string()
+                        if (cont.isActive) {
+                            cont.resume(body)
+                        }
+                    } catch (t: Throwable) {
+                        if (cont.isActive) {
+                            if (call.isCanceled() || t is CancellationException) {
+                                cont.cancel(CancellationException(t.message, t))
+                            } else {
+                                cont.resume(null)
+                            }
+                        }
+                    }
+                }
+            })
+        } catch (t: Throwable) {
+            if (cont.isActive) {
+                if (t is CancellationException) {
+                    cont.cancel(t)
+                } else {
+                    cont.resume(null)
+                }
+            }
+        }
+    }
+
+    suspend fun cancellablePost(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        requestBody: okhttp3.RequestBody,
+        timeoutSec: Long = 3L
+    ): Response? = suspendCancellableCoroutine { cont ->
+        try {
+            val client = app.baseClient.newBuilder()
+                .callTimeout(timeoutSec, TimeUnit.SECONDS)
+                .connectTimeout(timeoutSec, TimeUnit.SECONDS)
+                .readTimeout(timeoutSec, TimeUnit.SECONDS)
+                .build()
+            val req = Request.Builder()
+                .url(url)
+                .post(requestBody)
+                .apply {
+                    headers.forEach { (k, v) -> addHeader(k, v) }
+                }
+                .build()
+            val call = client.newCall(req)
+            cont.invokeOnCancellation {
+                call.cancel()
+            }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isActive) {
+                        if (call.isCanceled()) {
+                            cont.cancel(CancellationException(e.message, e))
+                        } else {
+                            cont.resume(null)
+                        }
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (cont.isActive) {
+                        cont.resume(response)
+                    }
+                }
+            })
+        } catch (t: Throwable) {
+            if (cont.isActive) {
+                if (t is CancellationException) {
+                    cont.cancel(t)
+                } else {
+                    cont.resume(null)
+                }
+            }
+        }
+    }
+
+    suspend fun cancellablePostText(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        requestBody: okhttp3.RequestBody,
+        timeoutSec: Long = 3L
+    ): String? {
+        val resp = cancellablePost(url, headers, requestBody, timeoutSec) ?: return null
+        return try {
+            resp.body?.string()
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            null
+        }
     }
 
     suspend fun isValidM3u8(url: String?, headers: Map<String, String> = emptyMap()): Boolean {
@@ -4725,21 +4867,34 @@ object StreamPlayExtractor : StreamPlay() {
 
             withTimeoutOrNull(25000L) {
                 val encUrl = "https://enc-dec.app/api/enc-vidlink?text=$effectiveTmdbId"
-                val encData = encDecApiSemaphore.withPermit {
-                    retryTransient(4, 350L) {
-                        val resp = runCatching { app.get(encUrl, timeout = 15L) }.getOrNull()
-                        if (resp != null) {
-                            if (resp.code == 429) {
-                                val retryAfterSec = resp.headers["Retry-After"]?.toLongOrNull() ?: 1L
-                                delay((retryAfterSec * 1000L).coerceIn(400L, 2000L))
-                                return@retryTransient null
-                            }
-                            if (resp.isSuccessful && resp.text.isNotBlank()) {
-                                val res = runCatching { JSONObject(resp.text).optString("result") }.getOrNull()
-                                if (!res.isNullOrBlank()) res else null
+                val cachedEnc = vidlinkEncCache[effectiveTmdbId]
+                val encData = if (!cachedEnc.isNullOrBlank()) {
+                    cachedEnc
+                } else {
+                    val fetchBlock: suspend () -> String? = {
+                        retryTransient(4, 350L) {
+                            val resp = runCatching { app.get(encUrl, timeout = 15L) }.getOrNull()
+                            if (resp != null) {
+                                if (resp.code == 429) {
+                                    val retryAfterSec = resp.headers["Retry-After"]?.toLongOrNull() ?: 1L
+                                    delay((retryAfterSec * 1000L).coerceIn(400L, 2000L))
+                                    return@retryTransient null
+                                }
+                                if (resp.isSuccessful && resp.text.isNotBlank()) {
+                                    val res = runCatching { JSONObject(resp.text).optString("result") }.getOrNull()
+                                    if (!res.isNullOrBlank()) res else null
+                                } else null
                             } else null
-                        } else null
+                        }
                     }
+                    val fetched = withTimeoutOrNull(2500L) {
+                        encDecApiSemaphore.withPermit { fetchBlock() }
+                    } ?: fetchBlock()
+
+                    if (!fetched.isNullOrBlank()) {
+                        vidlinkEncCache[effectiveTmdbId] = fetched
+                    }
+                    fetched
                 } ?: return@withTimeoutOrNull
 
                 val base = vidlink
@@ -4798,11 +4953,12 @@ object StreamPlayExtractor : StreamPlay() {
                             (v.contains("vidlink.pro", ignoreCase = true) || v.contains("embed", ignoreCase = true) || v.isBlank())
                     }
                     result.entries.removeIf { entry ->
-                        entry.key.equals("User-Agent", ignoreCase = true) || entry.key.equals("Accept", ignoreCase = true)
+                        entry.key.equals("User-Agent", ignoreCase = true) ||
+                        entry.key.equals("Accept", ignoreCase = true) ||
+                        entry.key.equals("Accept-Ranges", ignoreCase = true)
                     }
                     result["User-Agent"] = cronetUserAgent
                     result["Accept"] = "*/*"
-                    result["Accept-Ranges"] = "bytes"
                     return result
                 }
 
@@ -5309,7 +5465,7 @@ object StreamPlayExtractor : StreamPlay() {
                                     "Accept" to "application/json, text/plain, */*"
                                 )
                                 val responseText = withTimeoutOrNull(2200L) {
-                                    app.get(apiUrl, headers = yflixHeaders, timeout = 3L).text
+                                    cancellableGetText(apiUrl, headers = yflixHeaders, timeoutSec = 2L)
                                 } ?: return@launch
 
                                 if (responseText.isBlank() || responseText.contains("404 Not Found", ignoreCase = true)) return@launch
@@ -5473,7 +5629,7 @@ object StreamPlayExtractor : StreamPlay() {
             if (title.isNullOrBlank() && tmdbId == null && imdbId.isNullOrBlank()) return
             if (season != null && season != 0 && episode == null) return
 
-            withTimeoutOrNull(2800L) {
+            withTimeoutOrNull(2200L) {
                 val isTv = (season != null && season > 0) || (episode != null && episode > 0)
                 val encodedTitle = URLEncoder.encode(title ?: "", "UTF-8")
                 val wingType = if (isTv) "series" else "movie"
@@ -5486,21 +5642,22 @@ object StreamPlayExtractor : StreamPlay() {
                 val servers = listOf("Lisbon", "Nebula", "Solara")
                 val winnerDeferred = CompletableDeferred<CineJoyCandidateResult?>()
 
-                coroutineScope {
+                val winner = coroutineScope {
                     val serverJobs = servers.map { server ->
                         launch(Dispatchers.IO) {
                             if (winnerDeferred.isCompleted) return@launch
                             try {
+                                currentCoroutineContext().ensureActive()
                                 val targetUrl = "https://api.wing.st/?title=$encodedTitle&type=$wingType&year=$yearStr&imdb=$imdbStr&tmdb=$tmdbStr&server=$server&season=$seasonStr&episode=$episodeStr"
                                 val encUrl = "https://enc-dec.app/api/enc-cinejoy?url=${URLEncoder.encode(targetUrl, "UTF-8")}"
 
                                 val encResp = encDecApiSemaphore.withPermit {
-                                    withTimeoutOrNull(2200L) {
-                                        runCatching {
-                                            app.get(encUrl, timeout = 3L).text
-                                        }.getOrNull()
+                                    currentCoroutineContext().ensureActive()
+                                    withTimeoutOrNull(1800L) {
+                                        cancellableGetText(encUrl, timeoutSec = 2L)
                                     }
                                 } ?: return@launch
+                                currentCoroutineContext().ensureActive()
 
                                 if (encResp.isBlank()) return@launch
                                 val encJson = runCatching { JSONObject(encResp) }.getOrNull() ?: return@launch
@@ -5532,19 +5689,26 @@ object StreamPlayExtractor : StreamPlay() {
                                     "Origin" to "https://cinejoy.pk"
                                 )
 
-                                val gResp = withTimeoutOrNull(2200L) {
-                                    runCatching {
-                                        app.post(
-                                            "https://api.wing.st/g",
-                                            headers = wingHeaders,
-                                            requestBody = binaryData.toRequestBody("application/octet-stream".toMediaType()),
-                                            timeout = 3L
-                                        )
-                                    }.getOrNull()
+                                currentCoroutineContext().ensureActive()
+                                val gResp = withTimeoutOrNull(1800L) {
+                                    cancellablePost(
+                                        "https://api.wing.st/g",
+                                        headers = wingHeaders,
+                                        requestBody = binaryData.toRequestBody("application/octet-stream".toMediaType()),
+                                        timeoutSec = 2L
+                                    )
                                 } ?: return@launch
+                                currentCoroutineContext().ensureActive()
 
-                                if (!gResp.isSuccessful) return@launch
-                                val gBytes = runCatching { gResp.body.bytes() }.getOrNull() ?: return@launch
+                                if (!gResp.isSuccessful) {
+                                    gResp.close()
+                                    return@launch
+                                }
+                                val gBytes = runCatching { gResp.body?.bytes() }.getOrNull() ?: run {
+                                    gResp.close()
+                                    return@launch
+                                }
+                                gResp.close()
                                 if (gBytes.isEmpty()) return@launch
 
                                 val gB64 = base64UrlEncodeSafe(gBytes)
@@ -5553,18 +5717,19 @@ object StreamPlayExtractor : StreamPlay() {
                                     put("state", stateObj)
                                 }.toString()
 
+                                currentCoroutineContext().ensureActive()
                                 val decResp = encDecApiSemaphore.withPermit {
-                                    withTimeoutOrNull(2200L) {
-                                        runCatching {
-                                            app.post(
-                                                "https://enc-dec.app/api/dec-cinejoy",
-                                                headers = mapOf("Content-Type" to "application/json", "User-Agent" to USER_AGENT),
-                                                requestBody = decReqBody.toRequestBody("application/json".toMediaType()),
-                                                timeout = 3L
-                                            ).text
-                                        }.getOrNull()
+                                    currentCoroutineContext().ensureActive()
+                                    withTimeoutOrNull(1800L) {
+                                        cancellablePostText(
+                                            "https://enc-dec.app/api/dec-cinejoy",
+                                            headers = mapOf("Content-Type" to "application/json", "User-Agent" to USER_AGENT),
+                                            requestBody = decReqBody.toRequestBody("application/json".toMediaType()),
+                                            timeoutSec = 2L
+                                        )
                                     }
                                 } ?: return@launch
+                                currentCoroutineContext().ensureActive()
 
                                 if (decResp.isBlank()) return@launch
                                 val decJson = runCatching { JSONObject(decResp) }.getOrNull() ?: return@launch
@@ -5616,57 +5781,58 @@ object StreamPlayExtractor : StreamPlay() {
                     }
 
                     try {
-                        val winner = winnerDeferred.await()
-                        if (winner != null) {
-                            winner.captions.forEach { subtitleCallback?.invoke(it) }
-
-                            if (winner.json != null) {
-                                val tracksArray = winner.json.optJSONArray("subtitles") ?: winner.json.optJSONArray("tracks")
-                                if (tracksArray != null && subtitleCallback != null) {
-                                    for (i in 0 until tracksArray.length()) {
-                                        val trackObj = tracksArray.optJSONObject(i) ?: continue
-                                        val trackUrl = trackObj.optString("file").takeIf { it.isNotBlank() }
-                                            ?: trackObj.optString("url").takeIf { it.isNotBlank() } ?: continue
-                                        val trackLabel = trackObj.optString("label").takeIf { it.isNotBlank() }
-                                            ?: trackObj.optString("lang").takeIf { it.isNotBlank() } ?: "English"
-                                        val trackKind = trackObj.optString("kind", "subtitles")
-                                        if (!trackUrl.contains("thumbnail", ignoreCase = true) && !trackKind.equals("thumbnails", ignoreCase = true)) {
-                                            subtitleCallback(newSubtitleFile(cleanSubtitleLabel(trackLabel), trackUrl))
-                                        }
-                                    }
-                                }
-                            }
-
-                            val streamHeaders = winner.headers ?: mapOf(
-                                "User-Agent" to USER_AGENT,
-                                "Referer" to winner.referer,
-                                "Origin" to winner.referer.removeSuffix("/")
-                            )
-
-                            val isM3u8 = winner.streamUrl.contains(".m3u8", ignoreCase = true)
-                            val streamType = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-
-                            val variants = if (isM3u8) {
-                                runCatching {
-                                    generateM3u8("CineJoy", winner.streamUrl, winner.referer, headers = streamHeaders)
-                                }.getOrNull()
-                            } else null
-
-                            emitTopTierDualQualityStreamLinks(
-                                source = "CineJoy",
-                                baseName = "CineJoy",
-                                url = winner.streamUrl,
-                                referer = winner.referer,
-                                headers = streamHeaders,
-                                streamType = streamType,
-                                generatedLinks = variants,
-                                callback = callback
-                            )
-                        }
+                        winnerDeferred.await()
                     } finally {
                         serverJobs.forEach { it.cancel() }
                         supervisor.cancel()
                     }
+                }
+
+                if (winner != null) {
+                    winner.captions.forEach { subtitleCallback?.invoke(it) }
+
+                    if (winner.json != null) {
+                        val tracksArray = winner.json.optJSONArray("subtitles") ?: winner.json.optJSONArray("tracks")
+                        if (tracksArray != null && subtitleCallback != null) {
+                            for (i in 0 until tracksArray.length()) {
+                                val trackObj = tracksArray.optJSONObject(i) ?: continue
+                                val trackUrl = trackObj.optString("file").takeIf { it.isNotBlank() }
+                                    ?: trackObj.optString("url").takeIf { it.isNotBlank() } ?: continue
+                                val trackLabel = trackObj.optString("label").takeIf { it.isNotBlank() }
+                                    ?: trackObj.optString("lang").takeIf { it.isNotBlank() } ?: "English"
+                                val trackKind = trackObj.optString("kind", "subtitles")
+                                if (!trackUrl.contains("thumbnail", ignoreCase = true) && !trackKind.equals("thumbnails", ignoreCase = true)) {
+                                    subtitleCallback(newSubtitleFile(cleanSubtitleLabel(trackLabel), trackUrl))
+                                }
+                            }
+                        }
+                    }
+
+                    val streamHeaders = winner.headers ?: mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to winner.referer,
+                        "Origin" to winner.referer.removeSuffix("/")
+                    )
+
+                    val isM3u8 = winner.streamUrl.contains(".m3u8", ignoreCase = true)
+                    val streamType = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+
+                    val variants = if (isM3u8) {
+                        runCatching {
+                            generateM3u8("CineJoy", winner.streamUrl, winner.referer, headers = streamHeaders)
+                        }.getOrNull()
+                    } else null
+
+                    emitTopTierDualQualityStreamLinks(
+                        source = "CineJoy",
+                        baseName = "CineJoy",
+                        url = winner.streamUrl,
+                        referer = winner.referer,
+                        headers = streamHeaders,
+                        streamType = streamType,
+                        generatedLinks = variants,
+                        callback = callback
+                    )
                 }
             }
         } catch (e: Exception) {

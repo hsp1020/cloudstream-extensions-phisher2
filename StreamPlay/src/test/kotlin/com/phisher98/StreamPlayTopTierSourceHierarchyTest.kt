@@ -2188,4 +2188,90 @@ class StreamPlayTopTierSourceHierarchyTest {
         assertTrue("HexaSU 720p must now be released after higher rank completes", emitted.isNotEmpty())
         assertEquals("HexaSU", emitted[0].source)
     }
+
+    @Test
+    fun testPriorityRankingVidLinkDispatchesFirstAheadOfLowerRankSources() = runBlocking {
+        val emitted = mutableListOf<ExtractorLink>()
+        var vidlinkInFlight = true
+        val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
+            upstreamCallback = { emitted.add(it) },
+            scope = this,
+            stageWindowMs = 0L,
+            subtitleGraceMs = 50L,
+            topSourceGraceMs = 5000L,
+            activeTopRanks = setOf(100, 90, 88, 85),
+            isRankInFlight = { rank -> if (rank == 100) vidlinkInFlight else false }
+        )
+
+        val cinejoy720 = createLink("CineJoy", "CineJoy [720p]", "https://cinejoy.to/720.m3u8", Qualities.P720.value)
+        val cinejoy1080 = createLink("CineJoy", "CineJoy [1080p]", "https://cinejoy.to/1080.m3u8", Qualities.P1080.value)
+        val vidlink720 = createLink("Vidlink", "Vidlink [720p]", "https://bcdn.hakunaymatata.com/720.mp4", Qualities.P720.value)
+        val vidlink1080 = createLink("Vidlink", "Vidlink [1080p]", "https://bcdn.hakunaymatata.com/1080.mp4", Qualities.P1080.value)
+
+        // Lower rank source arrives first
+        dispatcher.onSubtitleReceived()
+        dispatcher.onLinkAccepted(cinejoy720)
+        dispatcher.onLinkAccepted(cinejoy1080)
+
+        // Must hold CineJoy because VidLink (rank 100) is in flight
+        delay(100L)
+        assertTrue("CineJoy must be held while rank 100 VidLink is in flight", emitted.isEmpty())
+
+        // VidLink finishes and emits its links
+        dispatcher.onLinkAccepted(vidlink720)
+        dispatcher.onLinkAccepted(vidlink1080)
+        vidlinkInFlight = false
+        dispatcher.markProviderCompleted("vidlink")
+
+        delay(100L)
+        // VidLink 720p MUST be emitted at index 0 (#1 top stream)
+        assertTrue("At least VidLink and CineJoy links must be emitted", emitted.size >= 2)
+        assertEquals("Vidlink", emitted[0].source)
+        assertEquals(Qualities.P720.value, emitted[0].quality)
+
+        // CineJoy 720p must follow VidLink 720p
+        assertEquals("CineJoy", emitted[1].source)
+        assertEquals(Qualities.P720.value, emitted[1].quality)
+    }
+
+    @Test
+    fun testSpeculativePipelinerNeverSkipsTopTierVidLinkEvenIfCircuitBreakerTrips() = runBlocking {
+        // Force circuit breaker to open state for vidlink
+        repeat(5) {
+            ProviderTelemetryManager.recordExecution("vidlink", false, 1000L)
+        }
+        assertTrue("VidLink must be marked circuit broken", ProviderTelemetryManager.isCircuitBroken("vidlink"))
+        assertFalse("canExecute must return false for open circuit breaker", ProviderTelemetryManager.canExecute("vidlink"))
+
+        // Top tier classification must stay TIER_1 and never demoted to TIER_3
+        val classifiedTier = SpeculativePipeliner.classifyProvider("vidlink")
+        assertEquals("Top tier vidlink must stay TIER_1 even when circuit broken", LatencyTier.TIER_1, classifiedTier)
+
+        var vidlinkExecuted = false
+        val task = PipelinedTask(
+            providerId = "vidlink",
+            isVideo = true,
+            taskTimeoutMs = 1000L
+        ) {
+            vidlinkExecuted = true
+        }
+
+        val controller = EarlySatisfactionController()
+        SpeculativePipeliner.executePipelined(
+            tasks = listOf(task),
+            controller = controller
+        )
+
+        assertTrue("VidLink task must execute and never be skipped by circuit breaker", vidlinkExecuted)
+    }
+
+    @Test
+    fun testVidlinkEncCacheCachesTmdbIdToToken() {
+        val testTmdbId = 999999
+        val testToken = "test_encrypted_token_12345"
+        StreamPlayExtractor.vidlinkEncCache[testTmdbId] = testToken
+
+        assertEquals(testToken, StreamPlayExtractor.vidlinkEncCache[testTmdbId])
+        StreamPlayExtractor.vidlinkEncCache.remove(testTmdbId)
+    }
 }

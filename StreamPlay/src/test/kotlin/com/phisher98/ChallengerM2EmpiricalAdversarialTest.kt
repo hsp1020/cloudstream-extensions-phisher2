@@ -35,6 +35,8 @@ class ChallengerM2EmpiricalAdversarialTest {
 
     @Before
     fun setUp() {
+        // Pre-warm class loading so JVM cold-start classloader does not distort coroutine cancellation benchmarks
+        StreamPlayExtractor.name
         ProviderTelemetryManager.clearAllForTesting()
         DeviceProfiler.resetForTesting()
     }

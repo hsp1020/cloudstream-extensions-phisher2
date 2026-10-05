@@ -891,7 +891,7 @@ open class StreamPlay(val sharedPref: SharedPreferences? = null) : MainAPI() {
         val dispatcher = StreamLinkOptimizer.PriorityStreamDispatcher(
             upstreamCallback = callback,
             scope = this,
-            topSourceGraceMs = if (slowInternetMode) 5000L else 3500L,
+            topSourceGraceMs = if (slowInternetMode) 20_000L else 15_000L,
             top720GraceMs = if (slowInternetMode) 6000L else 4500L,
             activeTopRanks = activeTopRanks,
             isRankInFlight = { rank -> runningTopProviders.any { (FAST_PROVIDER_BOOST[it] ?: 0f).toInt() == rank } }

@@ -2461,7 +2461,13 @@ object StreamLinkOptimizer {
                     .firstOrNull() ?: break
 
                 val candRank = getSourcePriorityRank(nextCandidate)
-                if (!hasHigherPendingTop720Rank(candRank) || topSourceGraceExpired || top720GraceExpired) {
+                val higherInFlight = hasHigherPendingTop720Rank(candRank)
+                val canDrain = if (!hasEmittedTopStream) {
+                    !higherInFlight || topSourceGraceExpired
+                } else {
+                    !higherInFlight || top720GraceExpired || topSourceGraceExpired
+                }
+                if (canDrain) {
                     pendingTop720Links.remove(nextCandidate)
                     if (!hasEmittedTopStream) {
                         emitTopStreamAndAdvance(nextCandidate)

@@ -421,6 +421,10 @@ object SpeculativePipeliner {
     )
 
     fun classifyProvider(providerId: String, initialTier: LatencyTier? = null): LatencyTier {
+        val isTopTier = StreamLinkOptimizer.isTopTierProvider(providerId) || (FAST_PROVIDER_BOOST[providerId] ?: 0f) >= 80f
+        if (isTopTier) {
+            return initialTier ?: STATIC_COLD_START_TIERS[providerId] ?: LatencyTier.TIER_1
+        }
         if (ProviderTelemetryManager.isRecovering(providerId) || ProviderTelemetryManager.isCanary(providerId)) {
             return LatencyTier.TIER_3
         }
@@ -560,7 +564,7 @@ object SpeculativePipeliner {
                 val isTopTier = isTopTierTask(task)
                 val isVideo = task.isVideo
                 launch(Dispatchers.IO) {
-                    if (!allBroken && !ProviderTelemetryManager.canExecute(task.providerId)) {
+                    if (!isTopTier && !allBroken && !ProviderTelemetryManager.canExecute(task.providerId)) {
                         Log.d(TAG, "Circuit breaker: skipping open provider ${task.providerId}")
                         return@launch
                     }

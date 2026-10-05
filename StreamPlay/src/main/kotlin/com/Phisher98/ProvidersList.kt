@@ -401,11 +401,11 @@ fun getDefaultDisabledProviderIds(): Set<String> =
 
 fun buildProviders(): List<Provider> = providers
 
-const val PREFS_TOP_TIER_INITIALIZED = "streamplay_top_tier_v14_initialized"
+const val PREFS_TOP_TIER_INITIALIZED = "streamplay_top_tier_v15_initialized"
 
 /**
  * Ensures clean installs enable DEFAULT_TOP_TIER_PROVIDERS (Vidlink > Vidup > CineJoy > HexaSU > AutoEmbed > MovieBox)
- * with all secondary and dead sources disabled by default, and seamlessly migrates upgrading users to v14:
+ * with all secondary and dead sources disabled by default, and seamlessly migrates upgrading users to v15:
  * permanently disables dead/unreliable providers (rivestream, vidfast, VidEasy, videasy, superstream, vaplayer, vidcore, vidsrc),
  * enables newly promoted SOTA providers (vidlink, vidup, cinejoy, HexaSU, autoembed, moviebox), and strictly preserves existing user customizations.
  */
@@ -419,7 +419,7 @@ fun getOrInitializeDisabledProviders(sharedPref: SharedPreferences?): Set<String
         val finalDisabled = if (existingDisabled.isNullOrEmpty()) {
             defaultDisabled + DEAD_PROVIDER_IDS
         } else {
-            // Override-preserving migration to v14:
+            // Override-preserving migration to v15:
             // 1. Add dead providers to disabled set (including rivestream, vidfast, VidEasy, vidcore, vidsrc, etc.)
             // 2. Remove newly promoted top-tier providers from disabled set (vidlink, vidup, cinejoy, HexaSU, autoembed, moviebox)
             // 3. Retain user's custom enabling/disabling of existing providers intact
@@ -438,9 +438,10 @@ fun getOrInitializeDisabledProviders(sharedPref: SharedPreferences?): Set<String
             putBoolean("streamplay_top_tier_v11_initialized", true)
             putBoolean("streamplay_top_tier_v12_initialized", true)
             putBoolean("streamplay_top_tier_v13_initialized", true)
+            putBoolean("streamplay_top_tier_v14_initialized", true)
             putBoolean(PREFS_TOP_TIER_INITIALIZED, true)
         }
-        Log.d("StreamPlay", "🎯 Initialized top-tier provider defaults v14: ${DEFAULT_TOP_TIER_PROVIDERS.size} active, ${finalDisabled.size} disabled")
+        Log.d("StreamPlay", "🎯 Initialized top-tier provider defaults v15: ${DEFAULT_TOP_TIER_PROVIDERS.size} active, ${finalDisabled.size} disabled")
         return finalDisabled
     }
     return sharedPref.getStringSet("disabled_providers", null) ?: getDefaultDisabledProviderIds()
